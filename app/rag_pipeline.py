@@ -1,116 +1,157 @@
-"""
-RAG管道 - 整合检索和生成功能
-"""
+# RAG Pipeline implementation
 
+# 移除导入 retrieve_docs
+# from retrieval import retrieve_docs 
+# 导入 Retriever (假设它位于 app.retriever)
 from app.retriever import Retriever
-from app.generator import Generator
-from app.openai_generator import OpenAIGenerator
-from utils.gpu_manager import GPUManager
-from utils.logger import log_function_call
+from llm_service import generate_answer
+# 导入 OpenAIGenerator
+from app.openai_generator import OpenAIGenerator 
 import logging
-import os
 
 class RAGPipeline:
-    def __init__(self, low_memory_mode=False, use_openai=True, openai_config=None, retriever_config=None):
+    """
+    Retrieval-Augmented Generation Pipeline.
+    Combines document retrieval with generative AI.
+    """
+    
+    # 修改 __init__ 签名，接收 retriever 实例
+    def __init__(self, retriever: Retriever, low_memory_mode=False, use_openai=False, openai_config=None):
         """
-        初始化RAG管道
+        Initialize the RAG pipeline.
         
         Args:
-            low_memory_mode (bool): 是否启用低内存模式
-            use_openai (bool): 是否使用OpenAI API生成
-            openai_config (dict): OpenAI配置，包含model, api_key, base_url
-            retriever_config (dict): 检索器配置，包含model_name等
+            retriever (Retriever): Retriever instance for document retrieval and embedding.
+            low_memory_mode (bool): Whether to operate in low memory mode
+            use_openai (bool): Whether to use OpenAI for generation
+            openai_config (dict): Configuration for OpenAI API
         """
-        # 获取GPU管理器
-        self.gpu_manager = GPUManager()
-        
-        # 检查低内存模式
-        if self.gpu_manager.gpu_available:
-            device_id = 0
-            total_memory = self.gpu_manager.gpu_info['devices'][device_id]['total_memory_gb']
-            logging.info(f"初始化RAG管道 - GPU总显存: {total_memory:.2f}GB")
-            
-            # 对于低显存设备，自动启用低内存模式
-            if total_memory < 1.0 and not low_memory_mode:
-                logging.info("检测到GPU显存小于1GB，自动启用低内存模式")
-                low_memory_mode = True
-        
-        # 初始化检索器配置
-        if retriever_config is None:
-            retriever_config = {}
-        
-        # 从环境变量获取检索器模型名称（如果未在参数中指定）
-        if "model_name" not in retriever_config:
-            retriever_config["model_name"] = os.environ.get("RETRIEVER_MODEL", "moka-ai/m3e-base")
-        
-        # 设置本地模型目录
-        if "local_model_dir" not in retriever_config:
-            retriever_config["local_model_dir"] = os.environ.get("LOCAL_MODEL_DIR", "models")
-            
-        # 确保use_gpu配置存在
-        if "use_gpu" not in retriever_config:
-            retriever_config["use_gpu"] = True
-        
-        # 初始化检索器
-        self.retriever = Retriever(
-            model_name=retriever_config["model_name"],
-            use_gpu=retriever_config["use_gpu"],
-            local_model_dir=retriever_config["local_model_dir"]
-        )
-        
-        # 初始化生成器
-        if use_openai:
-            if openai_config is None:
-                openai_config = {
-                    "model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
-                    "api_key": os.environ.get("OPENAI_API_KEY", None),
-                    "base_url": os.environ.get("OPENAI_BASE_URL", "https://api.fe8.cn/v1")
-                }
-            self.generator = OpenAIGenerator(**openai_config)
-            logging.info(f"使用OpenAI API进行生成，模型: {openai_config['model']}")
-        else:
-            # 使用本地模型作为备用
-            if low_memory_mode:
-                logging.info("使用低内存模式：嵌入模型使用GPU，生成模型使用CPU")
-                self.generator = Generator(model_name='distilgpt2', use_gpu=False)
+        # 存储 retriever 实例
+        self.retriever = retriever 
+        # 移除 vector_store 和 retriever_config 的存储 (如果不再需要)
+        # self.vector_store = vector_store 
+        self.low_memory_mode = low_memory_mode
+        self.use_openai = use_openai
+        self.openai_config = openai_config
+        self.llm_generator = None
+
+        # 添加调试日志
+        logging.debug(f"RAGPipeline init: use_openai={self.use_openai}, openai_config provided: {self.openai_config is not None}")
+        if self.openai_config:
+             logging.debug(f"RAGPipeline init: openai_config details: {self.openai_config}")
+
+        if self.use_openai:
+            if self.openai_config:
+                try:
+                    self.llm_generator = OpenAIGenerator(
+                        model=self.openai_config.get('model'),
+                        api_key=self.openai_config.get('api_key'),
+                        base_url=self.openai_config.get('base_url')
+                    )
+                    logging.info("OpenAI Generator initialized successfully.") # 更明确的成功日志
+                    # 添加日志确认 llm_generator 实例状态
+                    logging.debug(f"RAGPipeline init: llm_generator initialized: {self.llm_generator is not None}")
+                except Exception as e:
+                    logging.error(f"Failed to initialize OpenAIGenerator: {e}")
+                    self.llm_generator = None # 确保初始化失败时为 None
+                    self.use_openai = False # 初始化失败则禁用 OpenAI
+                    logging.warning("Disabling OpenAI due to generator initialization failure.")
             else:
-                self.generator = Generator(use_gpu=True)
+                logging.warning("use_openai is True, but openai_config is missing. OpenAI Generator not initialized.")
+                self.use_openai = False
+        else:
+             logging.info("Running RAG without OpenAI LLM generation.")
 
-    @log_function_call
-    def add_knowledge(self, documents, doc_ids=None):
+        # 确认最终的 use_openai 状态
+        logging.debug(f"RAGPipeline init finished. Final use_openai state: {self.use_openai}")
+        # 移除这条重复的日志
+        # logging.info("RAG Pipeline initialized")
+    
+    # 添加 add_knowledge 方法，用于调用 retriever 添加文档
+    def add_knowledge(self, documents: list[str], doc_ids: list[str]):
+         """Adds documents to the retriever's index."""
+         if not self.retriever:
+             logging.error("Retriever not initialized, cannot add knowledge.")
+             return
+         try:
+             added_count = self.retriever.add_documents(documents, doc_ids)
+             logging.info(f"Added {added_count} documents to the retriever index.")
+         except Exception as e:
+             logging.error(f"Error adding documents to retriever: {str(e)}")
+
+    def process_query(self, query, top_k=3):
         """
-        添加知识到检索器
+        Process a user query through the RAG pipeline.
         
         Args:
-            documents: 文档内容列表
-            doc_ids: 文档ID列表，可选
-        """
-        self.retriever.add_documents(documents, doc_ids)
-
-    @log_function_call
-    def answer_question(self, query, top_k=3):
-        """
-        回答问题
-        
-        Args:
-            query: 用户查询
-            top_k: 检索结果数量
+            query (str): User's query
+            top_k (int, optional): Number of top documents to retrieve. Defaults to 3.
             
         Returns:
-            生成的回答
+            dict: Response containing the answer, sources and query
         """
-        logging.info(f"处理查询: {query}")
-        contexts = self.retriever.retrieve(query, top_k=top_k)
-        
-        # 格式化增强查询，增加系统提示
-        context_text = "\n".join(contexts)
-        augmented_query = f"""基于以下背景信息回答问题。如果背景信息中没有相关内容，请诚实地说不知道。
+        try:
+            logging.info(f"Processing query: '{query}' with top_k={top_k}")
+            
+            # 检查 retriever 是否有效
+            if self.retriever is None:
+                 logging.error("Retriever is not initialized.")
+                 return {
+                     "query": query,
+                     "answer": "系统错误：检索器未初始化。",
+                     "sources": [],
+                     "success": False,
+                     "error": "Retriever not initialized"
+                 }
 
-背景信息：
-{context_text}
-
-问题：{query}"""
+            # 使用 self.retriever 进行检索
+            retrieved_doc_contents = self.retriever.retrieve(query, top_k=top_k)
+            
+            # 记录检索到的文档数量
+            logging.info(f"Retrieved {len(retrieved_doc_contents)} document contents")
+            
+            # 在调用前直接打印 self 的属性值
+            logging.debug(f"process_query: About to call generate_answer. self.use_openai is {self.use_openai}, self.llm_generator is None is {self.llm_generator is None}")
+            
+            # 将 LLM 相关信息传递给 generate_answer (确保参数都在)
+            answer = generate_answer(
+                query=query, 
+                retrieved_doc_contents=retrieved_doc_contents, 
+                use_openai=self.use_openai, 
+                llm_generator=self.llm_generator
+            )
+            
+            # Format response (sources 现在是文档内容)
+            response = {
+                "query": query,
+                "answer": answer,
+                # 将 sources 更新为检索到的文档内容
+                "sources": retrieved_doc_contents, 
+                "success": True
+            }
+            
+            logging.info(f"Query processed successfully")
+            return response
+            
+        except Exception as e:
+            logging.error(f"Error processing query: {str(e)}")
+            return {
+                "query": query,
+                "answer": "抱歉，处理您的问题时发生了错误",
+                "sources": [],
+                "success": False,
+                "error": str(e)
+            }
+    
+    def answer_question(self, query, top_k=3):
+        """
+        Answer a user question - alias for process_query.
         
-        logging.debug(f"增强查询: {augmented_query[:100]}...")
-        answer = self.generator.generate(augmented_query)
-        return answer 
+        Args:
+            query (str): User's question
+            top_k (int, optional): Number of top documents to retrieve. Defaults to 3.
+            
+        Returns:
+            dict: Response containing the answer
+        """
+        return self.process_query(query, top_k=top_k)

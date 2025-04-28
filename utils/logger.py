@@ -8,7 +8,7 @@ import sys
 from logging.handlers import RotatingFileHandler
 from utils.model_utils import ensure_dir_exists
 
-def setup_logger(log_file='logs/rag_app.log', console_level=logging.INFO, file_level=logging.DEBUG):
+def setup_logger(log_file='logs/rag_app.log', console_level=logging.DEBUG, file_level=logging.DEBUG):
     """
     设置应用日志
     

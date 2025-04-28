@@ -3,6 +3,7 @@ from utils.env_helper import get_api_config, get_system_config, print_env_setup_
 from utils.logger import setup_logger
 from utils.document_manager import DocumentManager
 from utils.gpu_manager import GPUManager
+from app.retriever import Retriever
 import os
 import argparse
 import logging
@@ -42,7 +43,7 @@ def parse_args():
                        help='禁用GPU，即使GPU可用')
     parser.add_argument('--reload-index', action='store_true',
                        help='重新加载索引和文档')
-    parser.add_argument('--log-level', type=str, default='INFO',
+    parser.add_argument('--log-level', type=str, default='DEBUG',
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
                        help='日志级别')
     parser.add_argument('--log-file', type=str, default='logs/rag_app.log',
@@ -101,23 +102,38 @@ def main():
     
     logging.info(f"检索器配置: 模型={retriever_config['model_name']}, 使用GPU={retriever_config['use_gpu']}")
     
-    # 初始化RAG，传入相关参数
+    # 初始化 Retriever
+    try:
+        retriever = Retriever(
+            model_name=retriever_config['model_name'],
+            use_gpu=retriever_config['use_gpu'],
+            local_model_dir=retriever_config['local_model_dir']
+            # 可以根据需要传递 index_dir 和 docs_dir
+        )
+    except Exception as e:
+        logging.error(f"初始化 Retriever 失败: {str(e)}")
+        # 根据需要处理错误，例如退出程序
+        return 
+
+    # 初始化RAG，传入 retriever 实例
     rag = RAGPipeline(
+        retriever=retriever, # 传递 retriever
         low_memory_mode=low_memory_mode,
         use_openai=not use_local_model,
-        openai_config=openai_config,
-        retriever_config=retriever_config
+        openai_config=openai_config
+        # 移除 retriever_config，因为它已被用于初始化 Retriever
     )
     
     # 初始化文档管理器
     doc_manager = DocumentManager()
     
-    # 加载文档并添加到检索器
+    # 加载文档并添加到 RAG Pipeline (它会调用 retriever.add_documents)
     try:
         documents, doc_ids = doc_manager.load_documents(incremental=not args.reload_index)
         if documents:
-            rag.add_knowledge(documents, doc_ids)
-            logging.info(f"成功加载并索引 {len(documents)} 个文档")
+            # 调用 RAG Pipeline 的 add_knowledge
+            rag.add_knowledge(documents, doc_ids) 
+            logging.info(f"请求 RAG Pipeline 添加 {len(documents)} 个文档")
         else:
             logging.info("没有新文档需要索引")
     except Exception as e:
@@ -143,8 +159,16 @@ def chat(rag, top_k=3):
             continue
         
         try:
-            answer = rag.answer_question(query, top_k=top_k)
-            print(f"\nRAG: {answer}")
+            # 将返回结果存储在 response_dict 中
+            response_dict = rag.answer_question(query, top_k=top_k)
+            # 检查 response_dict 是否为字典类型，并且包含 'answer' 键
+            if isinstance(response_dict, dict) and 'answer' in response_dict:
+                # 只打印 'answer' 的值
+                print(f"\nRAG: {response_dict['answer']}")
+            else:
+                # 如果格式不对或没有 answer，打印整个返回结果以供调试
+                logging.warning(f"Unexpected response format from RAG pipeline: {response_dict}")
+                print(f"\nRAG: {response_dict}")
         except Exception as e:
             logging.error(f"处理查询出错: {str(e)}")
             print(f"\nRAG: 抱歉，处理您的问题时出现错误。请稍后再试。")
