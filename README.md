@@ -57,21 +57,30 @@ This project uses environment variables for configuration:
 
 Create a .env file with the following content:
 
-```
-# OpenAI API Settings
-OPENAI_API_KEY=your_api_key_here
-OPENAI_BASE_URL=https://api.fe8.cn/v1
-OPENAI_MODEL=gpt-4o-mini
+```dotenv
+# OpenAI API设置 (如果 USE_LOCAL_MODEL=false)
+OPENAI_API_KEY="your_api_key_here"  # 替换为你的 OpenAI API Key
+OPENAI_BASE_URL="https://api.fe8.cn/v1" # 替换为你的 API 代理地址或官方地址
+OPENAI_MODEL="gpt-4o-mini"          # 使用的 OpenAI 模型
 
-# Retrieval Settings
-TOP_K=3
-RETRIEVER_MODEL=moka-ai/m3e-base
-LOCAL_MODEL_DIR=models
+# 检索设置
+TOP_K=3                            # 每次查询检索的文档片段数量
+RETRIEVER_MODEL="moka-ai/m3e-base" # 使用的 Sentence Transformer 嵌入模型
+LOCAL_MODEL_DIR="models"           # 本地嵌入模型缓存目录
+# VECTOR_DB_PATH="./vector_db"       # (旧配置，下面 index_dir 更准确) Faiss 索引文件的存储路径
+INDEX_DIR="data/indexes"         # Faiss 索引文件及文档映射 (.index, .docs.json) 的存储目录
+DOCS_DIR="data/documents"          # 原始知识文档 (.txt) 的存储目录
 
-# System Settings
+# 系统设置
+# 设置为 true 将完全禁用 OpenAI API 调用，仅显示检索到的上下文
 USE_LOCAL_MODEL=false
+# 设置为 true 启用低内存模式 (影响GPU使用策略，详见特性部分)
 LOW_MEMORY_MODE=false
+# 日志级别 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+LOG_LEVEL="INFO"
 ```
+**重要**: 确保 `.env` 文件中的 `VECTOR_DB_PATH` (如果在这里配置) 与 `app/retriever.py` 中 `Retriever` 类初始化时使用的 `index_dir` 路径一致 (默认为 `'data/indexes'`)，以避免索引文件位置混乱。建议统一配置或修改代码以使用单一配置源。
+**重要**: `Retriever` 使用 `INDEX_DIR` 来存储 Faiss 索引和文档映射文件，使用 `DOCS_DIR` 来读取原始文档。请确保这些路径配置正确。
 
 ### Method 2: Setting Environment Variables Directly
 
@@ -222,7 +231,9 @@ OPENAI_MODEL="gpt-4o-mini"          # 使用的 OpenAI 模型
 TOP_K=3                            # 每次查询检索的文档片段数量
 RETRIEVER_MODEL="moka-ai/m3e-base" # 使用的 Sentence Transformer 嵌入模型
 LOCAL_MODEL_DIR="models"           # 本地嵌入模型缓存目录
-VECTOR_DB_PATH="./vector_db"       # Faiss 索引文件的存储路径 (Retriever类会使用 index_dir 参数，注意配置统一)
+# VECTOR_DB_PATH="./vector_db"       # (旧配置，下面 index_dir 更准确) Faiss 索引文件的存储路径
+INDEX_DIR="data/indexes"         # Faiss 索引文件及文档映射 (.index, .docs.json) 的存储目录
+DOCS_DIR="data/documents"          # 原始知识文档 (.txt) 的存储目录
 
 # 系统设置
 # 设置为 true 将完全禁用 OpenAI API 调用，仅显示检索到的上下文
@@ -233,6 +244,7 @@ LOW_MEMORY_MODE=false
 LOG_LEVEL="INFO"
 ```
 **重要**: 确保 `.env` 文件中的 `VECTOR_DB_PATH` (如果在这里配置) 与 `app/retriever.py` 中 `Retriever` 类初始化时使用的 `index_dir` 路径一致 (默认为 `'data/indexes'`)，以避免索引文件位置混乱。建议统一配置或修改代码以使用单一配置源。
+**重要**: `Retriever` 使用 `INDEX_DIR` 来存储 Faiss 索引和文档映射文件，使用 `DOCS_DIR` 来读取原始文档。请确保这些路径配置正确。
 
 ### 方法2：直接设置环境变量
 

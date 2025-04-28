@@ -1,5 +1,5 @@
 from app.rag_pipeline import RAGPipeline
-from utils.env_helper import get_api_config, get_system_config, print_env_setup_guide
+from utils.env_helper import get_api_config, get_system_config, print_env_setup_guide, load_env_config
 from utils.logger import setup_logger
 from utils.document_manager import DocumentManager
 from utils.gpu_manager import GPUManager
@@ -43,7 +43,7 @@ def parse_args():
                        help='禁用GPU，即使GPU可用')
     parser.add_argument('--reload-index', action='store_true',
                        help='重新加载索引和文档')
-    parser.add_argument('--log-level', type=str, default='DEBUG',
+    parser.add_argument('--log-level', type=str, default='INFO',
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
                        help='日志级别')
     parser.add_argument('--log-file', type=str, default='logs/rag_app.log',
@@ -55,7 +55,10 @@ def main():
     # 解析命令行参数
     args = parse_args()
     
-    # 设置日志
+    # 在最开始加载 .env 文件
+    load_env_config() 
+
+    # 设置日志 (确保在加载环境变量后，如果日志配置依赖环境变量)
     log_level = getattr(logging, args.log_level)
     logger = setup_logger(log_file=args.log_file, console_level=log_level)
     
@@ -97,18 +100,25 @@ def main():
     retriever_config = {
         "model_name": args.embedding_model if args.embedding_model else sys_config["retriever_model"],
         "local_model_dir": args.local_model_dir if args.local_model_dir else sys_config["local_model_dir"],
-        "use_gpu": use_gpu
+        "use_gpu": use_gpu,
+        "index_dir": sys_config["index_dir"],
+        "docs_dir": sys_config["docs_dir"]
     }
     
-    logging.info(f"检索器配置: 模型={retriever_config['model_name']}, 使用GPU={retriever_config['use_gpu']}")
+    # 打印完整的 retriever_config (改为 DEBUG 级别)
+    logging.debug(f"Retriever configuration: {retriever_config}")
+    # 单独打印关键配置信息 (INFO 级别)
+    logging.info(f"Embedding model: {retriever_config['model_name']}")
+    logging.info(f"Retriever GPU usage enabled: {retriever_config['use_gpu']}")
     
     # 初始化 Retriever
     try:
         retriever = Retriever(
             model_name=retriever_config['model_name'],
             use_gpu=retriever_config['use_gpu'],
-            local_model_dir=retriever_config['local_model_dir']
-            # 可以根据需要传递 index_dir 和 docs_dir
+            local_model_dir=retriever_config['local_model_dir'],
+            index_dir=retriever_config['index_dir'],
+            docs_dir=retriever_config['docs_dir']
         )
     except Exception as e:
         logging.error(f"初始化 Retriever 失败: {str(e)}")

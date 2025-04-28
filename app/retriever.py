@@ -14,192 +14,223 @@ from utils.document_manager import DocumentManager
 from utils.logger import log_function_call
 
 class Retriever:
-    """向量检索器，负责文档向量化和相似度检索"""
+    """Vector retriever responsible for document vectorization and similarity search"""
     
-    def __init__(self, model_name='moka-ai/m3e-base', use_gpu=True, 
-                 local_model_dir='models', index_dir='data/indexes',
-                 docs_dir='data/documents'):
+    def __init__(self, model_name: str, use_gpu: bool, 
+                 local_model_dir: str, index_dir: str,
+                 docs_dir: str):
         """
-        初始化检索器
+        Initialize the Retriever.
         
         Args:
-            model_name: 使用的嵌入模型名称
-            use_gpu: 是否使用GPU
-            local_model_dir: 本地模型存储目录
-            index_dir: 索引存储目录
-            docs_dir: 文档目录
+            model_name: Name of the embedding model to use.
+            use_gpu: Whether to use GPU if available.
+            local_model_dir: Directory for storing/caching local models.
+            index_dir: Directory to store Faiss index and document mapping files.
+            docs_dir: Directory containing the original source documents.
         """
+        logging.info(f"Initializing Retriever with config: model_name='{model_name}', use_gpu={use_gpu}, local_model_dir='{local_model_dir}', index_dir='{index_dir}', docs_dir='{docs_dir}'")
         self.model_name = model_name
         self.use_gpu = use_gpu
         self.local_model_dir = local_model_dir
         self.index_dir = index_dir
         self.docs_dir = docs_dir
         
-        # 获取管理器实例
+        # Get manager instances
         self.gpu_manager = GPUManager()
         self.model_manager = ModelManager()
-        self.document_manager = DocumentManager(docs_dir=docs_dir)
+        # Initialize DocumentManager specific to this retriever's docs_dir
+        self.document_manager = DocumentManager(docs_dir=self.docs_dir)
         
-        # 确保索引目录存在
+        # Ensure index directory exists
+        logging.debug(f"Ensuring index directory exists: {index_dir}")
         ensure_dir_exists(index_dir)
         
-        # 生成安全的文件名
+        # Generate safe filename for the model
         self.model_name_safe = model_name.replace('/', '_')
         self.index_file = os.path.join(index_dir, f"{self.model_name_safe}.index")
         self.docs_file = os.path.join(index_dir, f"{self.model_name_safe}.docs.json")
+        logging.debug(f"Index file path: {self.index_file}")
+        logging.debug(f"Docs mapping file path: {self.docs_file}")
         
-        # 加载模型
+        # Load the embedding model
+        logging.info(f"Loading embedding model: '{model_name}'")
         self.model = self.model_manager.load_sentence_transformer(
-            model_name=model_name,
-            use_gpu=use_gpu,
-            local_model_dir=local_model_dir
+            model_name=self.model_name,
+            use_gpu=self.use_gpu,
+            local_model_dir=self.local_model_dir
         )
+        logging.info(f"Embedding model '{model_name}' loaded successfully.")
         
-        # 获取嵌入维度
+        # Get embedding dimension
         self.embedding_dim = self.model.get_sentence_embedding_dimension()
+        logging.info(f"Embedding dimension: {self.embedding_dim}")
         
-        # 加载或创建索引
+        # Load or create the index
+        logging.info("Loading or creating FAISS index...")
         self._load_index()
+        logging.info("FAISS index ready.")
         
     @log_function_call
     def _load_index(self):
-        """加载或创建索引和文档映射"""
+        """Load or create the index and document mapping."""
         self.docs = []
         self.doc_ids = []
         
         if os.path.exists(self.index_file) and os.path.exists(self.docs_file):
             try:
-                logging.info(f"加载索引: {self.index_file}")
+                logging.info(f"Attempting to load existing index from: {self.index_file}")
                 self.index = faiss.read_index(self.index_file)
+                logging.info(f"Successfully loaded index.")
                 
-                logging.info(f"加载文档ID: {self.docs_file}")
+                logging.info(f"Attempting to load document mapping from: {self.docs_file}")
                 with open(self.docs_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     self.doc_ids = data.get('doc_ids', [])
+                logging.info(f"Successfully loaded {len(self.doc_ids)} document IDs.")
                     
-                # 加载文档内容
+                # Load document content using DocumentManager
+                logging.info(f"Loading content for {len(self.doc_ids)} documents...")
+                loaded_count = 0
                 for doc_id in self.doc_ids:
                     content = self.document_manager.get_document(doc_id)
                     if content:
                         self.docs.append(content)
+                        loaded_count += 1
                     else:
-                        logging.warning(f"无法加载文档: {doc_id}")
+                        logging.warning(f"Could not load document content for ID: {doc_id}")
+                logging.info(f"Successfully loaded content for {loaded_count}/{len(self.doc_ids)} documents.")
                 
                 if len(self.docs) != len(self.doc_ids):
-                    logging.warning(f"文档数量不匹配: {len(self.docs)} != {len(self.doc_ids)}")
-                    # 重置索引和文档，稍后会重建
-                    self.docs = []
-                    self.doc_ids = []
-                    raise ValueError("文档数量不匹配")
+                    logging.warning(f"Document count mismatch after loading: {len(self.docs)} content vs {len(self.doc_ids)} IDs. Index may need rebuild.")
+                    # Reset and force creation of a new index
+                    raise ValueError("Document count mismatch")
                     
-                logging.info(f"成功加载索引和文档，包含 {len(self.docs)} 个文档")
+                logging.info(f"Successfully loaded existing index and documents. Total documents: {len(self.docs)}")
             except Exception as e:
-                logging.error(f"加载索引或文档失败: {str(e)}")
-                # 创建新索引
+                logging.error(f"Failed to load existing index or documents: {e}. Creating a new index.")
+                # Create new index
                 self.index = faiss.IndexFlatL2(self.embedding_dim)
                 self.docs = []
                 self.doc_ids = []
         else:
-            # 创建新索引
-            logging.info("创建新的FAISS索引")
+            logging.info(f"Index file '{self.index_file}' or docs file '{self.docs_file}' not found. Creating a new FAISS index.")
             self.index = faiss.IndexFlatL2(self.embedding_dim)
         
-        # 如果有GPU，且显存足够，使用GPU索引
+        # Move index to GPU if possible
+        logging.debug("Attempting to move index to GPU if available...")
         self._move_index_to_gpu_if_available()
         
     @log_function_call 
     def _move_index_to_gpu_if_available(self):
-        """如果可能的话，将索引移动到GPU"""
+        """Move the FAISS index to GPU if configured and possible."""
         self.on_gpu = False
         
         if not self.use_gpu:
-            logging.info("按配置不使用GPU")
+            logging.info("GPU usage is disabled by configuration.")
             return
             
         if not torch.cuda.is_available():
-            logging.info("GPU不可用，使用CPU")
+            logging.info("CUDA (GPU) not available, using CPU for index.")
             return
             
         if not hasattr(faiss, 'StandardGpuResources'):
-            logging.warning("FAISS不支持GPU，请安装faiss-gpu")
+            logging.warning("FAISS GPU support not available. Please install faiss-gpu. Using CPU for index.")
             return
             
         try:
-            # 获取GPU信息
-            total_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            # Check available GPU memory (simple check for >1GB)
+            gpu_props = torch.cuda.get_device_properties(0)
+            total_memory_gb = gpu_props.total_memory / (1024**3)
+            logging.info(f"GPU detected: {gpu_props.name}, Total Memory: {total_memory_gb:.2f} GB")
             
-            # 显存足够才使用GPU
-            if total_memory < 1.0:
-                logging.info(f"GPU显存不足，使用CPU: {total_memory:.2f}GB < 1.0GB")
+            # Example threshold: require at least 1GB VRAM for the index on GPU
+            if total_memory_gb < 1.0:
+                logging.info(f"GPU VRAM ({total_memory_gb:.2f}GB) is below threshold (1.0GB). Using CPU for FAISS index.")
                 return
                 
-            # 使用GPU资源
+            logging.info("Attempting to move FAISS index to GPU...")
             self.gpu_res = faiss.StandardGpuResources()
             self.index = faiss.index_cpu_to_gpu(self.gpu_res, 0, self.index)
             self.on_gpu = True
-            logging.info("FAISS使用GPU进行向量检索")
+            logging.info("FAISS index successfully moved to GPU.")
         except Exception as e:
-            logging.error(f"将索引移至GPU失败: {str(e)}")
+            logging.error(f"Failed to move FAISS index to GPU: {e}. Using CPU for index.")
+            # Fallback to CPU index if GPU transfer fails
+            if self.on_gpu:
+                try:
+                    self.index = faiss.index_gpu_to_cpu(self.index) # Ensure it's back on CPU
+                except:
+                    pass # Ignore errors during fallback attempt
+            self.on_gpu = False
             
     @log_function_call
     def save_index(self):
-        """保存索引和文档ID到磁盘"""
+        """Save the index and document IDs to disk."""
         try:
-            # 如果索引在GPU上，需要先将其移回CPU
             index_to_save = self.index
             if self.on_gpu:
+                logging.info("Moving index from GPU to CPU before saving...")
                 index_to_save = faiss.index_gpu_to_cpu(self.index)
+                logging.info("Index moved to CPU.")
                 
-            # 保存FAISS索引
-            logging.info(f"保存索引到: {self.index_file}")
+            logging.info(f"Saving FAISS index to: {self.index_file}")
             faiss.write_index(index_to_save, self.index_file)
             
-            # 保存文档ID
-            logging.info(f"保存文档ID到: {self.docs_file}")
+            logging.info(f"Saving document IDs to: {self.docs_file}")
             with open(self.docs_file, 'w', encoding='utf-8') as f:
                 json.dump({'doc_ids': self.doc_ids}, f, ensure_ascii=False, indent=2)
                 
-            logging.info(f"索引和文档ID保存成功，共 {len(self.docs)} 个文档")
+            logging.info(f"Index and document IDs saved successfully. Total documents: {len(self.docs)}")
             return True
         except Exception as e:
-            logging.error(f"保存索引和文档ID失败: {str(e)}")
+            logging.error(f"Failed to save index and document IDs: {e}")
             return False
     
     @log_function_call
     def add_documents(self, documents=None, doc_ids=None):
         """
-        添加文档到索引
+        Add documents to the index.
         
         Args:
-            documents: 文档内容列表，如不提供则从文档管理器加载
-            doc_ids: 文档ID列表，需与documents长度一致
+            documents: List of document contents. If None, loads from DocumentManager.
+            doc_ids: List of document IDs, must match documents length.
             
         Returns:
-            添加的文档数量
+            Number of documents added.
         """
         if documents is None:
-            # 从文档管理器加载
+            logging.info("Loading documents from DocumentManager...")
+            # Load incrementally by default (can be changed in DocumentManager logic if needed)
             documents, doc_ids = self.document_manager.load_documents(incremental=True)
+            logging.info(f"Loaded {len(documents)} new/modified documents from manager.")
             
         if not documents:
-            logging.info("没有新文档需要添加")
+            logging.info("No new documents to add to the index.")
             return 0
             
         if doc_ids is None:
-            doc_ids = [f"doc_{i}" for i in range(len(documents))]
+            # Generate generic doc_ids if not provided
+            start_index = len(self.docs) # Base new IDs on current count
+            doc_ids = [f"doc_{start_index + i}" for i in range(len(documents))]
+            logging.warning(f"Document IDs not provided, generated generic IDs: {doc_ids}")
             
         if len(documents) != len(doc_ids):
-            raise ValueError(f"文档数量与ID数量不匹配: {len(documents)} != {len(doc_ids)}")
+            logging.error(f"Mismatch between document count ({len(documents)}) and ID count ({len(doc_ids)}). Aborting add.")
+            raise ValueError(f"Document count and ID count mismatch: {len(documents)} != {len(doc_ids)}")
             
-        logging.info(f"为 {len(documents)} 个文档创建向量嵌入")
-        embeddings = self.model.encode(documents)
+        logging.info(f"Creating embeddings for {len(documents)} documents...")
+        # Consider adding batching for large numbers of documents if encode supports it well
+        embeddings = self.model.encode(documents, normalize_embeddings=True) # Normalize for L2 index
+        logging.info("Embeddings created.")
         
-        # 添加到索引
+        logging.info(f"Adding {len(embeddings)} embeddings to the FAISS index...")
         self.index.add(np.array(embeddings, dtype=np.float32))
         self.docs.extend(documents)
         self.doc_ids.extend(doc_ids)
+        logging.info(f"{len(embeddings)} embeddings added. Index now contains {self.index.ntotal} vectors.")
         
-        # 保存索引
+        # Save the updated index
         self.save_index()
         
         return len(documents)
@@ -207,93 +238,116 @@ class Retriever:
     @log_function_call
     def retrieve(self, query, top_k=3):
         """
-        检索与查询最相关的文档
+        Retrieve documents most relevant to the query.
         
         Args:
-            query: 查询文本
-            top_k: 返回结果数量
+            query: The query text.
+            top_k: Number of results to return.
             
         Returns:
-            最相关的文档列表
+            List of most relevant document contents.
         """
-        if not self.docs:
-            logging.warning("检索时没有可用文档")
+        if not self.index or self.index.ntotal == 0:
+            logging.warning("Retrieval attempted but index is empty.")
             return []
             
-        query_embedding = self.model.encode([query])
-        k = min(top_k, len(self.docs))
+        logging.debug(f"Encoding query for retrieval: '{query[:100]}...'")
+        query_embedding = self.model.encode([query], normalize_embeddings=True)
         
-        # 执行检索
+        # Ensure k is not greater than the number of documents in the index
+        k = min(top_k, self.index.ntotal)
+        logging.debug(f"Searching index for top {k} documents.")
+        
+        # Perform the search
         distances, indices = self.index.search(np.array(query_embedding, dtype=np.float32), k)
         
-        # 获取结果
+        # Process results
         results = []
-        result_ids = []
-        for idx in indices[0]:
-            if 0 <= idx < len(self.docs):
-                results.append(self.docs[idx])
-                result_ids.append(self.doc_ids[idx])
-                
-        logging.info(f"查询 '{query}' 找到 {len(results)} 个相关文档")
+        retrieved_ids = []
+        if k > 0 and len(indices) > 0:
+            for idx in indices[0]:
+                if 0 <= idx < len(self.docs):
+                    results.append(self.docs[idx])
+                    retrieved_ids.append(self.doc_ids[idx])
+                else:
+                    logging.warning(f"Index search returned invalid index: {idx}")
+                    
+        logging.info(f"Query '{query[:50]}...' retrieved {len(results)} documents with IDs: {retrieved_ids}")
         return results
     
     @log_function_call
     def retrieve_with_metadata(self, query, top_k=3):
         """
-        检索与查询最相关的文档，并返回文档ID和距离
+        Retrieve documents with their IDs and similarity scores.
         
         Args:
-            query: 查询文本
-            top_k: 返回结果数量
+            query: The query text.
+            top_k: Number of results to return.
             
         Returns:
-            (文档内容, 文档ID, 距离得分)元组的列表
+            List of tuples: (document_content, document_id, score)
         """
-        if not self.docs:
-            logging.warning("检索时没有可用文档")
+        if not self.index or self.index.ntotal == 0:
+            logging.warning("Retrieval attempted but index is empty.")
             return []
             
-        query_embedding = self.model.encode([query])
-        k = min(top_k, len(self.docs))
+        logging.debug(f"Encoding query for retrieval with metadata: '{query[:100]}...'")
+        query_embedding = self.model.encode([query], normalize_embeddings=True)
+        k = min(top_k, self.index.ntotal)
+        logging.debug(f"Searching index for top {k} documents with metadata.")
         
-        # 执行检索
         distances, indices = self.index.search(np.array(query_embedding, dtype=np.float32), k)
         
-        # 获取结果
         results = []
-        for i, idx in enumerate(indices[0]):
-            if 0 <= idx < len(self.docs):
-                results.append((
-                    self.docs[idx],         # 文档内容
-                    self.doc_ids[idx],      # 文档ID
-                    float(distances[0][i])  # 距离得分
-                ))
+        if k > 0 and len(indices) > 0:
+            for i, idx in enumerate(indices[0]):
+                if 0 <= idx < len(self.docs):
+                    results.append((
+                        self.docs[idx],         # Document content
+                        self.doc_ids[idx],      # Document ID
+                        float(distances[0][i])  # Distance score (lower is better for L2)
+                    ))
+                else:
+                     logging.warning(f"Index search returned invalid index: {idx}")
                 
-        logging.info(f"查询 '{query}' 找到 {len(results)} 个相关文档")
+        logging.info(f"Query '{query[:50]}...' retrieved {len(results)} documents with metadata.")
         return results
 
     @log_function_call
     def clear_index(self):
-        """清空索引和文档"""
-        # 重新创建索引
+        """Clear the index and associated documents."""
+        logging.info("Clearing FAISS index and document store...")
+        # Recreate the index object
         self.index = faiss.IndexFlatL2(self.embedding_dim)
+        logging.debug("New empty FAISS index created.")
         
-        # 如果在GPU上，需要将新索引移到GPU
+        # Move to GPU if applicable
         if self.on_gpu and hasattr(self, 'gpu_res'):
-            self.index = faiss.index_cpu_to_gpu(self.gpu_res, 0, self.index)
+            try:
+                self.index = faiss.index_cpu_to_gpu(self.gpu_res, 0, self.index)
+                logging.info("New empty index moved to GPU.")
+            except Exception as e:
+                 logging.error(f"Failed to move new empty index to GPU: {e}")
+                 self.on_gpu = False # Ensure state reflects reality
             
-        # 清空文档列表
+        # Clear document lists
         self.docs = []
         self.doc_ids = []
+        logging.debug("In-memory document lists cleared.")
         
-        # 删除索引文件和文档文件
-        if os.path.exists(self.index_file):
-            os.remove(self.index_file)
-            logging.info(f"已删除索引文件: {self.index_file}")
+        # Delete index and docs files from disk
+        deleted_files = []
+        try:
+            if os.path.exists(self.index_file):
+                os.remove(self.index_file)
+                logging.info(f"Deleted index file: {self.index_file}")
+                deleted_files.append(self.index_file)
+            if os.path.exists(self.docs_file):
+                os.remove(self.docs_file)
+                logging.info(f"Deleted document mapping file: {self.docs_file}")
+                deleted_files.append(self.docs_file)
+        except OSError as e:
+            logging.error(f"Error deleting index/docs files: {e}")
             
-        if os.path.exists(self.docs_file):
-            os.remove(self.docs_file)
-            logging.info(f"已删除文档ID文件: {self.docs_file}")
-            
-        logging.info("索引和文档已清空")
+        logging.info(f"Index clear operation complete. Deleted files: {deleted_files}")
         return True 

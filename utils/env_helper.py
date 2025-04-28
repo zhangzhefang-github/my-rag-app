@@ -38,9 +38,6 @@ def get_api_config() -> Dict[str, Any]:
     Returns:
         包含API配置的字典
     """
-    # 加载环境变量
-    load_env_config()
-    
     # 获取OpenAI相关配置
     config = {
         "model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
@@ -57,16 +54,15 @@ def get_system_config() -> Dict[str, Any]:
     Returns:
         包含系统配置的字典
     """
-    # 加载环境变量
-    load_env_config()
-    
     # 获取系统相关配置
     config = {
         "use_local_model": os.environ.get("USE_LOCAL_MODEL", "false").lower() in ["true", "1", "yes"],
         "low_memory_mode": os.environ.get("LOW_MEMORY_MODE", "false").lower() in ["true", "1", "yes"],
         "top_k": int(os.environ.get("TOP_K", 3)),
         "retriever_model": os.environ.get("RETRIEVER_MODEL", "moka-ai/m3e-base"),
-        "local_model_dir": os.environ.get("LOCAL_MODEL_DIR", "models")
+        "local_model_dir": os.environ.get("LOCAL_MODEL_DIR", "models"),
+        "index_dir": os.environ.get("INDEX_DIR", "data/indexes"),
+        "docs_dir": os.environ.get("DOCS_DIR", "data/documents")
     }
     
     return config

@@ -1,51 +1,72 @@
 # LLM service module for the RAG application
 
 import logging
-# 导入 OpenAIGenerator 用于类型提示 (可选)
-from typing import Optional
+import asyncio
+from typing import Optional, AsyncGenerator, Union
 from app.openai_generator import OpenAIGenerator
 
-def generate_answer(query, retrieved_doc_contents, use_openai=False, llm_generator: Optional[OpenAIGenerator]=None):
+# Make the function async
+async def generate_answer(query, retrieved_doc_contents, use_openai=False, llm_generator: Optional[OpenAIGenerator]=None, stream=False) -> Union[str, AsyncGenerator[str, None]]:
     """
     Generate an answer based on the query and retrieved documents, potentially using an LLM.
+    Supports both regular string response and streaming async generator response.
     
     Args:
         query (str): User's query
         retrieved_doc_contents (list[str]): List of retrieved document contents
         use_openai (bool): Flag indicating whether to use OpenAI.
         llm_generator (OpenAIGenerator, optional): Initialized OpenAI generator instance.
+        stream (bool): If True, attempt to stream the response.
         
     Returns:
-        str: Generated answer (either from LLM or a fallback).
+        If stream is False: The generated answer as a string.
+        If stream is True: An async generator yielding answer chunks.
     """
     
-    # 添加调试日志
-    logging.debug(f"generate_answer called with: use_openai={use_openai}, llm_generator is None: {llm_generator is None}")
+    logging.debug(f"generate_answer called with: use_openai={use_openai}, llm_generator is None: {llm_generator is None}, stream={stream}")
     if llm_generator:
          logging.debug(f"LLM generator details: model={llm_generator.model}")
 
-    # 构建上下文
     context = "\n---\n".join(retrieved_doc_contents)
     
     if use_openai and llm_generator:
-        # 构建 Prompt
         prompt = f"Based on the following context:\n{context}\n\nAnswer the question: {query}"
         
-        logging.info("Generating answer using OpenAI LLM...")
+        logging.info(f"Generating answer using OpenAI LLM... (Stream={stream})")
         try:
-            # 调用 LLM 生成答案
-            llm_answer = llm_generator.generate(prompt)
-            logging.info("LLM generation successful.")
-            return llm_answer
+            # Call the async generate method, passing the stream flag
+            response = await llm_generator.generate(prompt, stream=stream)
+            
+            if stream:
+                # If streaming, return the async generator directly
+                logging.info("Returning LLM stream.")
+                return response 
+            else:
+                # If not streaming, return the complete string
+                logging.info("LLM generation successful (non-streaming).")
+                return response
+                
         except Exception as e:
-            logging.error(f"Error during LLM generation: {e}")
-            return "抱歉，调用语言模型生成答案时出错。"
+            logging.error(f"Error during LLM generation: {e}", exc_info=True)
+            error_message = "抱歉，调用语言模型生成答案时出错。"
+            if stream:
+                async def error_stream():
+                    yield error_message
+                    await asyncio.sleep(0)
+                return error_stream()
+            else:
+                return error_message
     else:
-        # 如果不使用 OpenAI 或生成器无效，返回基于上下文的简单回答或提示
+        # Fallback for non-OpenAI or missing generator
         logging.warning("LLM generator not used. Returning placeholder answer.")
-        # 可以选择返回之前的模板答案，或更明确的提示
-        # return f"Based on the context below:\n{context}\n\nAnswer for '{query}': This is a sample answer (LLM not used)."
+        fallback_message = f"根据检索到的信息：\n{context}\n\n(注意：未使用大型语言模型进行最终回答生成)"
         if not context:
-            return "抱歉，未能检索到相关信息来回答您的问题。"
+             fallback_message = "抱歉，未能检索到相关信息来回答您的问题。"
+
+        if stream:
+            async def fallback_stream():
+                yield fallback_message
+                await asyncio.sleep(0) # Ensure it's an async generator
+            return fallback_stream()
         else:
-             return f"根据检索到的信息：\n{context}\n\n(注意：未使用大型语言模型进行最终回答生成)"
+            return fallback_message

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG 检索增强生成应用</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+        }
+        .info-box {
+            background-color: #e8f4f8;
+            border-left: 4px solid #3498db;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        .api-link {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>RAG 检索增强生成应用</h1>
+        
+        <div class="info-box">
+            <h2>欢迎使用</h2>
+            <p>这是一个基于RAG (检索增强生成) 技术的演示应用。该应用能够根据问题检索相关文档，并基于这些文档生成准确的回答。</p>
+        </div>
+        
+        <h2>API 使用说明</h2>
+        <p>本应用提供了两种查询接口：</p>
+        
+        <h3>1. 标准查询</h3>
+        <div class="api-link">
+            POST /query
+        </div>
+        <p>一次性返回完整的回答和引用来源。</p>
+        
+        <h3>2. 流式查询</h3>
+        <div class="api-link">
+            POST /query/stream
+        </div>
+        <p>使用服务器发送事件 (SSE) 流式返回生成的回答。</p>
+        
+        <h3>请求示例</h3>
+        <pre>
+{
+    "query": "你的问题",
+    "top_k": 3
+}
+        </pre>
+        
+        <div class="info-box">
+            <h3>技术栈</h3>
+            <ul>
+                <li>后端: FastAPI</li>
+                <li>语言模型: OpenAI API</li>
+                <li>向量搜索: FAISS</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html> 

@@ -8,6 +8,7 @@ from llm_service import generate_answer
 # 导入 OpenAIGenerator
 from app.openai_generator import OpenAIGenerator 
 import logging
+from typing import Union, AsyncGenerator
 
 class RAGPipeline:
     """
@@ -79,79 +80,112 @@ class RAGPipeline:
          except Exception as e:
              logging.error(f"Error adding documents to retriever: {str(e)}")
 
-    def process_query(self, query, top_k=3):
+    # Make process_query async as it now calls async generate_answer
+    async def process_query(self, query, top_k=3) -> dict:
         """
-        Process a user query through the RAG pipeline.
+        Process a user query through the RAG pipeline (non-streaming response).
         
         Args:
             query (str): User's query
             top_k (int, optional): Number of top documents to retrieve. Defaults to 3.
             
         Returns:
-            dict: Response containing the answer, sources and query
+            dict: Response containing the full answer, sources, and status.
         """
         try:
-            logging.info(f"Processing query: '{query}' with top_k={top_k}")
+            logging.info(f"Processing query: '{query}' with top_k={top_k} (non-streaming)")
             
-            # 检查 retriever 是否有效
             if self.retriever is None:
                  logging.error("Retriever is not initialized.")
                  return {
                      "query": query,
-                     "answer": "系统错误：检索器未初始化。",
+                     "answer": "System error: Retriever not initialized.",
                      "sources": [],
                      "success": False,
                      "error": "Retriever not initialized"
                  }
 
-            # 使用 self.retriever 进行检索
             retrieved_doc_contents = self.retriever.retrieve(query, top_k=top_k)
-            
-            # 记录检索到的文档数量
             logging.info(f"Retrieved {len(retrieved_doc_contents)} document contents")
-            
-            # 在调用前直接打印 self 的属性值
+
             logging.debug(f"process_query: About to call generate_answer. self.use_openai is {self.use_openai}, self.llm_generator is None is {self.llm_generator is None}")
             
-            # 将 LLM 相关信息传递给 generate_answer (确保参数都在)
-            answer = generate_answer(
+            # Call generate_answer with stream=False
+            answer = await generate_answer(
                 query=query, 
                 retrieved_doc_contents=retrieved_doc_contents, 
                 use_openai=self.use_openai, 
-                llm_generator=self.llm_generator
+                llm_generator=self.llm_generator,
+                stream=False # Explicitly non-streaming
             )
             
-            # Format response (sources 现在是文档内容)
             response = {
                 "query": query,
                 "answer": answer,
-                # 将 sources 更新为检索到的文档内容
                 "sources": retrieved_doc_contents, 
-                "success": True
+                "success": True,
+                "error": None
             }
             
-            logging.info(f"Query processed successfully")
+            logging.info(f"Query processed successfully (non-streaming)")
             return response
             
         except Exception as e:
-            logging.error(f"Error processing query: {str(e)}")
+            logging.error(f"Error processing non-streaming query: {e}", exc_info=True)
             return {
                 "query": query,
-                "answer": "抱歉，处理您的问题时发生了错误",
+                "answer": "Error processing query.",
                 "sources": [],
                 "success": False,
                 "error": str(e)
             }
     
-    def answer_question(self, query, top_k=3):
+    # Keep original answer_question as an alias for non-streaming
+    async def answer_question(self, query, top_k=3) -> dict:
+        return await self.process_query(query, top_k=top_k)
+
+    # Add a new method for streaming
+    async def stream_answer_question(self, query: str, top_k: int = 3) -> AsyncGenerator[str, None]:
         """
-        Answer a user question - alias for process_query.
-        
+        Process a user query and streams the answer back token by token.
+
         Args:
-            query (str): User's question
-            top_k (int, optional): Number of top documents to retrieve. Defaults to 3.
-            
-        Returns:
-            dict: Response containing the answer
+            query: The user query.
+            top_k: Number of documents to retrieve.
+
+        Yields:
+            String chunks of the generated answer.
         """
-        return self.process_query(query, top_k=top_k)
+        try:
+            logging.info(f"Processing query: '{query}' with top_k={top_k} (streaming)")
+            
+            if self.retriever is None:
+                logging.error("Retriever is not initialized for streaming.")
+                yield "Error: Retriever not initialized."
+                return
+
+            # Step 1: Retrieve documents (sync for now, can be async if retriever supports it)
+            retrieved_doc_contents = self.retriever.retrieve(query, top_k=top_k)
+            logging.info(f"Retrieved {len(retrieved_doc_contents)} documents for streaming context.")
+            # Optionally, yield sources info first if desired
+            # yield json.dumps({"type": "sources", "data": retrieved_doc_contents}) + "\n\n"
+
+            # Step 2: Generate answer using streaming
+            logging.debug(f"stream_answer_question: Calling generate_answer (stream=True). use_openai={self.use_openai}")
+            answer_stream = await generate_answer(
+                query=query,
+                retrieved_doc_contents=retrieved_doc_contents,
+                use_openai=self.use_openai,
+                llm_generator=self.llm_generator,
+                stream=True
+            )
+
+            # Step 3: Yield chunks from the answer stream
+            async for chunk in answer_stream:
+                yield chunk
+            
+            logging.info(f"Finished streaming answer for query: '{query}'")
+
+        except Exception as e:
+            logging.error(f"Error during streaming query processing: {e}", exc_info=True)
+            yield f"Error processing stream: {e}" # Yield error message in stream
