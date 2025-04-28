@@ -1,0 +1,17 @@
+{
+  "files": {
+    "source.txt": {
+      "size": 571,
+      "mtime": 1745817805.707577,
+      "path": "data/documents/source.txt",
+      "hash": "3090cd74c860f4e2e3c337b4b336a682"
+    },
+    "test_document.txt": {
+      "size": 1620,
+      "mtime": 1745818018.6174662,
+      "path": "data/documents/test_document.txt",
+      "hash": "99256b6e9bc75c6ec61a2b8ed8337a6a"
+    }
+  },
+  "last_update": 1745824464.4913838
+}

@@ -1,0 +1,56 @@
+# 环境配置文件
+.env
+*.env
+
+# Python相关
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 虚拟环境
+venv/
+ENV/
+rag-gpu/
+
+# 模型缓存
+models/
+
+# 日志
+*.log
+logs/
+
+# 数据库文件
+*.db
+*.sqlite3
+
+# 操作系统相关
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# 编辑器相关
+.idea/
+.vscode/
+*.swp
+*.swo

@@ -1,0 +1,24 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# RAG项目结构
+
+这是一个简单的检索增强生成(RAG)项目。
+
+## 主要组件
+
+- [main.py](mdc:main.py) - 应用程序的入口点，初始化RAG管道并运行简单的CLI界面
+- [app/rag_pipeline.py](mdc:app/rag_pipeline.py) - 连接检索器和生成器的RAG管道实现
+- [app/retriever.py](mdc:app/retriever.py) - 使用SentenceTransformer和FAISS进行文档检索
+- [app/generator.py](mdc:app/generator.py) - 使用Hugging Face模型进行文本生成
+- [config/config.yaml](mdc:config/config.yaml) - 配置参数
+- [utils/helper.py](mdc:utils/helper.py) - 工具函数
+
+## 数据流
+
+1. 文档从`data/documents/`加载
+2. 检索器为文档创建嵌入并存储在FAISS索引中
+3. 用户提问后，检索器查找相关文档
+4. 生成器结合原始问题和检索到的上下文生成回答

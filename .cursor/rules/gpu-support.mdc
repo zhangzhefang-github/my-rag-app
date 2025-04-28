@@ -1,0 +1,53 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# GPU支持指南
+
+## 自动GPU检测
+
+本项目已经配置为自动检测并使用GPU，主要实现在以下文件中：
+
+- [app/generator.py](mdc:app/generator.py) - 使用PyTorch检测GPU，并将设备参数传递给Transformers pipeline
+- [app/retriever.py](mdc:app/retriever.py) - SentenceTransformer自动使用可用的GPU，并尝试为FAISS启用GPU支持
+- [app/rag_pipeline.py](mdc:app/rag_pipeline.py) - 根据GPU显存自动选择最佳配置
+
+## 低显存GPU支持
+
+如果您的GPU显存有限（如2GB或更少），系统提供了低显存模式：
+
+1. 自动检测：当检测到GPU显存小于2GB时，系统会自动启用低显存模式
+2. 手动启用：您也可以使用命令行参数手动启用 `python main.py --low-memory`
+
+低显存模式的工作原理：
+- 嵌入模型（SentenceTransformer）优先使用GPU
+- 生成模型（Transformers）使用CPU运行
+- 使用更小的模型（如distilgpt2替代gpt2）
+- 根据可用显存决定FAISS是否使用GPU
+
+[main.py](mdc:main.py)中包含了命令行参数处理逻辑：
+```python
+parser.add_argument('--low-memory', action='store_true', 
+                    help='启用低内存模式，优化2GB以下显存的GPU使用')
+```
+
+## GPU加速FAISS
+
+默认情况下，项目使用`faiss-cpu`，但如果希望使用GPU加速FAISS：
+
+1. 安装`faiss-gpu`替代`faiss-cpu`：
+```bash
+pip uninstall -y faiss-cpu
+pip install faiss-gpu
+```
+
+2. 重启应用程序后，系统将自动检测到`faiss-gpu`并使用GPU资源
+
+## 性能优化建议
+
+- 对于2GB显存的GPU，推荐使用低显存模式
+- 如果显存更大，可以使用完整的GPU加速
+- 对于大型文档集合，FAISS的GPU加速特别明显
+- 对于模型推理，请确保安装了正确的CUDA和cuDNN版本，与PyTorch兼容
+- 输出信息会显示每个组件实际使用的设备（GPU或CPU）

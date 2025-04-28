@@ -1,0 +1,11 @@
+retriever:
+  model: moka-ai/m3e-base
+  local_model_dir: models
+  top_k: 3
+
+openai:
+  model: gpt-4o-mini
+
+system:
+  use_local_model: false
+  low_memory_mode: false 

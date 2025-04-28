@@ -1,0 +1,25 @@
+# 核心依赖
+transformers>=4.30.0
+langchain>=0.0.267
+sentence-transformers>=2.2.2
+torch>=2.0.0
+numpy>=1.24.0
+pyyaml>=6.0
+openai>=1.6.0  # OpenAI API客户端
+python-dotenv>=1.0.0  # 环境变量管理
+
+# UI相关
+streamlit>=1.27.0
+
+# 向量存储 - 二选一，默认使用CPU版本
+faiss-cpu>=1.7.4
+# 如需GPU加速，替换为:
+# faiss-gpu>=1.7.4
+
+# 可选依赖
+tqdm>=4.65.0
+scikit-learn>=1.2.0
+# 如果需要处理PDF文档
+# pypdf>=3.15.1
+# 如果需要处理Office文档
+# python-docx>=0.8.11 

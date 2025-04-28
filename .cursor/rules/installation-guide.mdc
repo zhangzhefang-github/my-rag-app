@@ -1,0 +1,82 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# 安装与配置指南
+
+## 依赖安装
+
+本项目依赖在[requirements.txt](mdc:requirements.txt)中定义，主要包括：
+
+- transformers: 用于自然语言处理和文本生成
+- sentence-transformers: 用于文本嵌入
+- faiss-cpu/faiss-gpu: 用于向量检索
+- torch: PyTorch深度学习框架
+- langchain: LLM应用开发框架
+- streamlit: 用于构建Web界面
+
+## 环境设置
+
+推荐使用Conda创建虚拟环境：
+
+```bash
+# 创建环境
+conda create -n rag-gpu python=3.10
+conda activate rag-gpu
+
+# 安装依赖
+pip install -r requirements.txt
+```
+
+## GPU配置
+
+### PyTorch GPU设置
+
+确保已安装正确版本的CUDA和cuDNN，然后安装GPU版PyTorch：
+
+```bash
+# CUDA 11.8
+pip install torch>=2.0.0 --index-url https://download.pytorch.org/whl/cu118
+
+# 或 CUDA 12.1
+pip install torch>=2.0.0 --index-url https://download.pytorch.org/whl/cu121
+```
+
+验证PyTorch是否可以访问GPU：
+```python
+import torch
+print(f"GPU可用: {torch.cuda.is_available()}")
+print(f"GPU数量: {torch.cuda.device_count()}")
+print(f"GPU名称: {torch.cuda.get_device_name(0)}")
+```
+
+### FAISS GPU配置
+
+安装GPU版本的FAISS：
+```bash
+pip uninstall -y faiss-cpu
+pip install faiss-gpu>=1.7.4
+```
+
+## 低内存模式配置
+
+如果GPU显存有限（如2GB），可以使用低内存模式：
+
+1. 启动时使用`--low-memory`参数：
+   ```bash
+   python main.py --low-memory
+   ```
+
+2. 在代码中，[app/rag_pipeline.py](mdc:app/rag_pipeline.py)会根据此参数优化资源分配：
+   - 使用更小的模型
+   - 将部分计算转移到CPU
+   - 优先为嵌入模型分配GPU资源
+
+## 故障排除
+
+如果遇到CUDA错误：
+1. 确认GPU驱动已正确安装
+2. 确认CUDA版本与PyTorch兼容
+3. 确认显存足够（使用`nvidia-smi`查看）
+4. 尝试使用`--low-memory`模式运行
