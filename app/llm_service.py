@@ -1,96 +1,108 @@
 import logging
 import os
-from typing import List, Union, AsyncGenerator
+from typing import List, Union, AsyncGenerator, Dict, Any
 import traceback
-from .retriever import DocumentRetriever
-from .openai_generator import OpenAIGenerator
+# import re # No longer needed here
+# 移除 DocumentRetriever，因为它在这里没有使用
+# from .retriever import DocumentRetriever 
+# 移除 OpenAIGenerator 导入
+# from .openai_generator import OpenAIGenerator
+from langchain_core.messages import SystemMessage, HumanMessage
+
+# 导入新的策略工厂函数
+from .llm_strategies import get_llm_strategy
+
+# 获取 LLM 策略实例 (在模块加载时获取并缓存)
+try:
+    llm_strategy = get_llm_strategy()
+except ValueError as e:
+    logging.error(f"Failed to initialize LLM strategy: {e}")
+    llm_strategy = None # 或者提供一个默认的错误处理策略
+
+# Remove the helper function
+# def remove_think_block(text: str) -> str:
+#     ...
 
 async def generate_answer(
-    query: str, 
+    query: str,
     retrieved_doc_contents: List[str] = None,
-    use_openai: bool = True,
     stream: bool = False
-) -> Union[str, AsyncGenerator[str, None]]:
+) -> AsyncGenerator[Dict[str, Any], None]: # Always returns AsyncGenerator
     """
-    根据用户查询生成回答，支持标准和流式响应。
-    
-    Args:
-        query: 用户查询
-        retrieved_doc_contents: 检索到的文档内容列表
-        use_openai: 是否使用OpenAI API
-        stream: 是否使用流式响应
+    Generates an answer using the configured LLM strategy.
+    Always returns an async generator. If stream=False, the generator 
+    yields a single dictionary with type 'final_answer' or 'error'.
+    If stream=True, yields multiple dictionaries with type 'chunk' or 'error'.
+    """
+    logging.info(f"Generating answer for query: {query[:50]}... Streaming: {stream}")
 
-    Returns:
-        根据stream参数返回字符串或异步生成器
-    """
-    logging.info(f"生成回答，查询: {query[:50]}...")
-    logging.info(f"流式模式: {stream}, 使用OpenAI: {use_openai}")
-    
-    if not query:
-        error_msg = "无效查询: 查询内容为空"
-        logging.error(error_msg)
-        if stream:
-            async def error_generator():
-                yield error_msg
-            return error_generator()
-        else:
-            return error_msg
-    
-    # 检查是否有检索内容
-    if not retrieved_doc_contents or not any(retrieved_doc_contents):
-        logging.warning("没有提供检索文档内容，将使用纯LLM生成")
-    else:
-        logging.info(f"提供了 {len(retrieved_doc_contents)} 个检索文档")
-        
+    # --- Get LLM Strategy --- 
     try:
-        if use_openai:
-            logging.info("使用OpenAI生成回答")
+        llm_strategy = get_llm_strategy()
+    except ValueError as e:
+        logging.error(f"Failed to initialize LLM strategy: {e}")
+        yield {"type": "error", "content": f"LLM strategy initialization failed: {e}"}
+        return
+
+    if llm_strategy is None:
+        yield {"type": "error", "content": "LLM strategy is not available."}
+        return
             
-            # 构建提示词
-            prompt = f"用户问题: {query}\n\n"
-            
-            if retrieved_doc_contents and any(retrieved_doc_contents):
-                prompt += "以下是相关文档内容，请基于这些内容回答问题:\n\n"
-                for i, doc_content in enumerate(retrieved_doc_contents):
-                    prompt += f"文档 {i+1}:\n{doc_content}\n\n"
-            else:
-                prompt += "没有找到相关文档，请尽力回答问题。\n\n"
-                
-            prompt += "请以中文回答上述问题，保持礼貌专业。如果无法从提供的文档中找到答案，请明确说明。"
-            
-            logging.debug(f"完整提示词: {prompt}")
-            
-            # 初始化OpenAI生成器
-            generator = OpenAIGenerator()
-            
-            # 生成回答
-            if stream:
-                logging.info("使用流式生成模式")
-                # 不要使用await来获取异步生成器，直接返回它
-                return generator.generate(prompt=prompt, stream=True)
-            else:
-                logging.info("使用标准生成模式")
-                # 标准模式需要await
-                return await generator.generate(prompt=prompt, stream=False)
+    if not query:
+        yield {"type": "error", "content": "Invalid query: Query content is empty."}
+        return
+
+    # --- Prepare messages --- 
+    try:
+        context = ""
+        if retrieved_doc_contents and any(retrieved_doc_contents):
+            logging.info(f"Using {len(retrieved_doc_contents)} retrieved documents.")
+            context += "Based on the following documents, please answer the question:\n\n"
+            for i, doc_content in enumerate(retrieved_doc_contents):
+                context += f"Document {i+1}:\n{doc_content}\n\n"
         else:
-            # 使用默认回复
-            error_msg = "仅支持OpenAI生成，请设置use_openai=True"
-            logging.warning(error_msg)
-            if stream:
-                async def error_generator():
-                    yield error_msg
-                return error_generator()
-            else:
-                return error_msg
-                
-    except Exception as e:
-        error_msg = f"生成过程出错: {str(e)}"
-        logging.error(error_msg)
-        logging.error(traceback.format_exc())
+            logging.warning("No relevant documents provided or found. Answering based on general knowledge.")
+            context = "Please answer the following question to the best of your ability." 
+
+        system_message_content = context + "\n请像一个乐于助人的朋友一样用中文回答用户的问题。"
         
+        messages = [
+            SystemMessage(content=system_message_content),
+            HumanMessage(content=query)
+        ]
+        logging.debug(f"Messages prepared for LLM: {messages}")
+
+    except Exception as e:
+        logging.error(f"Error preparing LLM messages: {e}", exc_info=True)
+        yield {"type": "error", "content": f"Error preparing request: {e}"}
+        return
+        
+    # --- Execute LLM Call (Streaming or Non-Streaming) --- 
+    try:
         if stream:
-            async def error_generator():
-                yield error_msg
-            return error_generator()
-        else:
-            return error_msg 
+            logging.info("Initiating streaming response.")
+            async for chunk_content in llm_strategy.astream(messages):
+                yield {"type": "chunk", "content": chunk_content}
+            # Streaming ends implicitly
+            
+        else: # Non-streaming case
+            logging.info("Generating standard (non-streaming) response.")
+            raw_answer = await llm_strategy.ainvoke(messages) # Use ainvoke for consistency?
+                                                         # Or keep invoke if strategies don't have ainvoke
+            # Let's assume strategies have invoke (like current Ollama/CustomAPI)
+            # If ainvoke is needed, OllamaStrategy/CustomAPIStrategy need ainvoke impl.
+            raw_answer = llm_strategy.invoke(messages) 
+            
+            # Clean the response (if needed, or do it in API layer)
+            # For simplicity, let's keep the cleaning logic here for now
+            answer = remove_think_block(raw_answer) 
+            
+            logging.info("Successfully generated non-streaming answer.")
+            # Yield the single final answer
+            yield {"type": "final_answer", "content": answer}
+
+    except Exception as e:
+        error_msg = f"Error during LLM call: {str(e)}"
+        logging.error(error_msg, exc_info=True)
+        yield {"type": "error", "content": error_msg}
+        return # End generation after error 

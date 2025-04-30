@@ -3,3 +3,30 @@ description:
 globs:
 alwaysApply: false
 ---
+# 数据与配置指南
+
+## 数据管理
+
+- 知识文档应存放在`data/documents/`目录下
+- 目前系统处理的是`.txt`格式的文本文件
+- 文档在[main.py](mdc:main.py)中被加载并添加到RAG系统中
+
+```python
+# 加载文档的代码片段
+docs_path = 'data/documents/'
+documents = []
+for file in os.listdir(docs_path):
+    if file.endswith('.txt'):
+        with open(os.path.join(docs_path, file), 'r', encoding='utf-8') as f:
+            documents.append(f.read())
+```
+
+## 配置管理
+
+[config/config.yaml](mdc:config/config.yaml)文件包含以下配置参数：
+
+- `retriever_model`: 用于文档嵌入的模型（默认为'all-MiniLM-L6-v2'）
+- `generator_model`: 用于文本生成的模型（默认为'gpt2'）
+- `top_k`: 检索时返回的相关文档数量
+
+配置文件通过[utils/helper.py](mdc:utils/helper.py)中的`load_config`函数加载。

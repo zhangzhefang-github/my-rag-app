@@ -2,7 +2,7 @@
   "files": {
     "source.txt": {
       "size": 571,
-      "mtime": 1745817805.707577,
+      "mtime": 1745856768.225578,
       "path": "data/documents/source.txt",
       "hash": "3090cd74c860f4e2e3c337b4b336a682"
     },
@@ -11,7 +11,13 @@
       "mtime": 1745818018.6174662,
       "path": "data/documents/test_document.txt",
       "hash": "99256b6e9bc75c6ec61a2b8ed8337a6a"
+    },
+    "source_two.txt": {
+      "size": 380,
+      "mtime": 1745898225.7137775,
+      "path": "data/documents/source_two.txt",
+      "hash": "404155965c3c575f90761906c11fa5c4"
     }
   },
-  "last_update": 1745852657.6093583
+  "last_update": 1745988685.4437544
 }

@@ -4,188 +4,199 @@
 # from retrieval import retrieve_docs 
 # 导入 Retriever (假设它位于 app.retriever)
 from app.retriever import Retriever
-from llm_service import generate_answer
-# 导入 OpenAIGenerator
-from app.openai_generator import OpenAIGenerator 
+# 使用重构后的 llm_service
+from app.llm_service import generate_answer 
+# 移除 OpenAIGenerator 导入
+# from app.openai_generator import OpenAIGenerator 
 import logging
-from typing import Union, AsyncGenerator
+from typing import Union, AsyncGenerator, Dict, List, Any, Optional
+# 移除 Generator 导入 (如果不再使用本地生成器)
+# from app.generator import Generator
+import time
+import asyncio
+
+
+# 获取已配置的logger
+logger = logging.getLogger(__name__)
 
 class RAGPipeline:
     """
     Retrieval-Augmented Generation Pipeline.
-    Combines document retrieval with generative AI.
+    Combines document retrieval with generative AI selected via environment configuration.
     """
     
-    # 修改 __init__ 签名，接收 retriever 实例
-    def __init__(self, retriever: Retriever, low_memory_mode=False, use_openai=False, openai_config=None):
+    def __init__(self, retriever: Retriever):
         """
-        Initialize the RAG pipeline.
+        Initializes the RAG pipeline.
         
         Args:
-            retriever (Retriever): Retriever instance for document retrieval and embedding.
-            low_memory_mode (bool): Whether to operate in low memory mode
-            use_openai (bool): Whether to use OpenAI for generation
-            openai_config (dict): Configuration for OpenAI API
+            retriever: An instance of the retriever.
         """
-        # 存储 retriever 实例
-        self.retriever = retriever 
-        # 移除 vector_store 和 retriever_config 的存储 (如果不再需要)
-        # self.vector_store = vector_store 
-        self.low_memory_mode = low_memory_mode
-        self.use_openai = use_openai
-        self.openai_config = openai_config
-        self.llm_generator = None
-
-        # 添加调试日志
-        logging.debug(f"RAGPipeline init: use_openai={self.use_openai}, openai_config provided: {self.openai_config is not None}")
-        if self.openai_config:
-             logging.debug(f"RAGPipeline init: openai_config details: {self.openai_config}")
-
-        if self.use_openai:
-            if self.openai_config:
-                try:
-                    self.llm_generator = OpenAIGenerator(
-                        model=self.openai_config.get('model'),
-                        api_key=self.openai_config.get('api_key'),
-                        base_url=self.openai_config.get('base_url')
-                    )
-                    logging.info("OpenAI Generator initialized successfully.") # 更明确的成功日志
-                    # 添加日志确认 llm_generator 实例状态
-                    logging.debug(f"RAGPipeline init: llm_generator initialized: {self.llm_generator is not None}")
-                except Exception as e:
-                    logging.error(f"Failed to initialize OpenAIGenerator: {e}")
-                    self.llm_generator = None # 确保初始化失败时为 None
-                    self.use_openai = False # 初始化失败则禁用 OpenAI
-                    logging.warning("Disabling OpenAI due to generator initialization failure.")
-            else:
-                logging.warning("use_openai is True, but openai_config is missing. OpenAI Generator not initialized.")
-                self.use_openai = False
-        else:
-             logging.info("Running RAG without OpenAI LLM generation.")
-
-        # 确认最终的 use_openai 状态
-        logging.debug(f"RAGPipeline init finished. Final use_openai state: {self.use_openai}")
-        # 移除这条重复的日志
-        # logging.info("RAG Pipeline initialized")
-    
-    # 添加 add_knowledge 方法，用于调用 retriever 添加文档
-    def add_knowledge(self, documents: list[str], doc_ids: list[str]):
-         """Adds documents to the retriever's index."""
-         if not self.retriever:
-             logging.error("Retriever not initialized, cannot add knowledge.")
-             return
-         try:
-             added_count = self.retriever.add_documents(documents, doc_ids)
-             logging.info(f"Added {added_count} documents to the retriever index.")
-         except Exception as e:
-             logging.error(f"Error adding documents to retriever: {str(e)}")
-
-    # Make process_query async as it now calls async generate_answer
+        if not isinstance(retriever, Retriever):
+             raise TypeError("retriever must be an instance of Retriever")
+        self.retriever = retriever
+        # 不再需要管理 LLM 生成器实例，llm_service 会处理
+        # self.generator = None # 移除
+        logger.info(f"RAG Pipeline initialized with retriever: {type(retriever).__name__}")
+        
+    def add_knowledge(self, documents: List[str], doc_ids: List[str] = None) -> bool:
+        """
+        Adds knowledge documents to the retriever.
+        
+        Args:
+            documents: List of document contents.
+            doc_ids: Optional list of document IDs.
+            
+        Returns:
+            bool: True if successful, False otherwise.
+        """
+        start_time = time.time()
+        logger.info(f"Starting to add knowledge - Document count: {len(documents)}")
+        
+        try:
+            # 确保 retriever 实例存在
+            if self.retriever is None:
+                 logger.error("Cannot add knowledge: Retriever is not initialized.")
+                 return False
+            result = self.retriever.add_documents(documents, doc_ids)
+            elapsed = time.time() - start_time
+            logger.info(f"Knowledge addition completed - Time taken: {elapsed:.2f} seconds")
+            return result
+        except Exception as e:
+            logger.error(f"Failed to add knowledge: {e}", exc_info=True)
+            return False
+            
     async def process_query(self, query, top_k=3) -> dict:
         """
         Process a user query through the RAG pipeline (non-streaming response).
         
         Args:
-            query (str): User's query
+            query (str): User's query.
             top_k (int, optional): Number of top documents to retrieve. Defaults to 3.
             
         Returns:
             dict: Response containing the full answer, sources, and status.
         """
         try:
-            logging.info(f"Processing query: '{query}' with top_k={top_k} (non-streaming)")
+            logger.info(f"Processing query: '{query}' with top_k={top_k} (non-streaming)")
             
             if self.retriever is None:
-                 logging.error("Retriever is not initialized.")
+                 logger.error("Retriever is not initialized.")
+                 # 返回更详细的错误信息
                  return {
                      "query": query,
-                     "answer": "System error: Retriever not initialized.",
+                     "answer": "System error: Retriever component is missing.",
                      "sources": [],
                      "success": False,
                      "error": "Retriever not initialized"
                  }
 
-            retrieved_doc_contents = self.retriever.retrieve(query, top_k=top_k)
-            logging.info(f"Retrieved {len(retrieved_doc_contents)} document contents")
+            # 执行检索
+            retrieval_start = time.time()
+            retrieved_docs_content, _ = self.retriever.retrieve(query, top_k=top_k)
+            retrieval_time = time.time() - retrieval_start
+            logger.info(f"Retrieved {len(retrieved_docs_content)} document contents in {retrieval_time:.2f}s")
 
-            logging.debug(f"process_query: About to call generate_answer. self.use_openai is {self.use_openai}, self.llm_generator is None is {self.llm_generator is None}")
-            
-            # Call generate_answer with stream=False
+            # 调用重构后的 generate_answer
+            generation_start = time.time()
             answer = await generate_answer(
                 query=query, 
-                retrieved_doc_contents=retrieved_doc_contents, 
-                use_openai=self.use_openai, 
-                llm_generator=self.llm_generator,
-                stream=False # Explicitly non-streaming
+                retrieved_doc_contents=retrieved_docs_content,
+                stream=False
             )
+            generation_time = time.time() - generation_start
+            logger.info(f"Generated non-streaming answer in {generation_time:.2f}s")
             
+            # 准备响应
             response = {
                 "query": query,
                 "answer": answer,
-                "sources": retrieved_doc_contents, 
+                # 返回实际检索到的文档内容作为 sources
+                "sources": retrieved_docs_content, 
                 "success": True,
                 "error": None
             }
             
-            logging.info(f"Query processed successfully (non-streaming)")
+            logger.info(f"Query processed successfully (non-streaming)")
             return response
             
         except Exception as e:
-            logging.error(f"Error processing non-streaming query: {e}", exc_info=True)
+            logger.error(f"Error processing non-streaming query: {e}", exc_info=True)
+            # 返回详细错误信息
             return {
                 "query": query,
-                "answer": "Error processing query.",
+                "answer": f"Error processing query: {str(e)}",
                 "sources": [],
                 "success": False,
                 "error": str(e)
             }
     
-    # Keep original answer_question as an alias for non-streaming
-    async def answer_question(self, query, top_k=3) -> dict:
-        return await self.process_query(query, top_k=top_k)
-
-    # Add a new method for streaming
-    async def stream_answer_question(self, query: str, top_k: int = 3) -> AsyncGenerator[str, None]:
+    async def answer_question(self, question: str, top_k: int = 3) -> Dict[str, Any]:
         """
-        Process a user query and streams the answer back token by token.
-
+        Answers a question using retrieval and generation (non-streaming).
+        This method now acts as a wrapper around process_query for consistency.
+        
         Args:
-            query: The user query.
-            top_k: Number of documents to retrieve.
-
-        Yields:
-            String chunks of the generated answer.
+            question: The user's question.
+            top_k: The number of documents to retrieve.
+            
+        Returns:
+            Dict: A dictionary containing the answer and related information.
         """
+        logger.info(f"Answering question (non-streaming wrapper): '{question[:50]}...'")
+        # 直接调用 process_query 处理
+        return await self.process_query(query=question, top_k=top_k)
+
+    async def stream_answer_question(self, question: str, top_k: int = 3) -> AsyncGenerator[Union[str, Dict[str, Any]], None]:
+        """
+        Answers a question using retrieval and generation (streaming).
+        
+        Args:
+            question: The user's question.
+            top_k: The number of documents to retrieve.
+            
+        Yields:
+            Intermediate processing steps (like 'retrieving', 'generating') 
+            and then the streamed answer chunks (strings). Finally yields sources.
+        """
+        logger.info(f"Processing query (streaming): '{question[:50]}...', top_k={top_k}")
+        start_time = time.time()
+
         try:
-            logging.info(f"Processing query: '{query}' with top_k={top_k} (streaming)")
-            
             if self.retriever is None:
-                logging.error("Retriever is not initialized for streaming.")
-                yield "Error: Retriever not initialized."
-                return
+                 logger.error("Retriever is not initialized for streaming.")
+                 yield {"type": "error", "content": "System error: Retriever component is missing."}
+                 return
 
-            # Step 1: Retrieve documents (sync for now, can be async if retriever supports it)
-            retrieved_doc_contents = self.retriever.retrieve(query, top_k=top_k)
-            logging.info(f"Retrieved {len(retrieved_doc_contents)} documents for streaming context.")
-            # Optionally, yield sources info first if desired
-            # yield json.dumps({"type": "sources", "data": retrieved_doc_contents}) + "\n\n"
+            # 1. 检索步骤
+            yield {"type": "status", "content": "检索相关文档..."}
+            retrieval_start = time.time()
+            retrieved_docs_content, _ = self.retriever.retrieve(question, top_k=top_k)
+            retrieval_time = time.time() - retrieval_start
+            logger.info(f"Streaming retrieval completed - Found {len(retrieved_docs_content)} docs in {retrieval_time:.2f}s")
+            yield {"type": "status", "content": f"找到 {len(retrieved_docs_content)} 篇相关文档"}
 
-            # Step 2: Generate answer using streaming
-            logging.debug(f"stream_answer_question: Calling generate_answer (stream=True). use_openai={self.use_openai}")
-            answer_stream = await generate_answer(
-                query=query,
-                retrieved_doc_contents=retrieved_doc_contents,
-                use_openai=self.use_openai,
-                llm_generator=self.llm_generator,
-                stream=True
-            )
+            # 2. 生成步骤 (流式)
+            yield {"type": "status", "content": "生成回答..."}
+            generation_start = time.time()
+            async for chunk_dict in generate_answer(
+                query=question, 
+                retrieved_doc_contents=retrieved_docs_content,
+                stream=True 
+            ):
+                # 直接将 generate_answer 返回的字典 yield 出去
+                # api.py 中的 message_stream_generator 已经知道如何处理这个字典
+                yield chunk_dict 
+                
+            generation_time = time.time() - generation_start
+            logger.info(f"Streaming generation completed in {generation_time:.2f}s")
 
-            # Step 3: Yield chunks from the answer stream
-            async for chunk in answer_stream:
-                yield chunk
-            
-            logging.info(f"Finished streaming answer for query: '{query}'")
+            # 3. 返回源文档 (作为最后一步信息)
+            yield {"type": "sources", "content": retrieved_docs_content}
+
+            total_time = time.time() - start_time
+            logger.info(f"Streaming query processed successfully - Total time: {total_time:.2f}s")
 
         except Exception as e:
-            logging.error(f"Error during streaming query processing: {e}", exc_info=True)
-            yield f"Error processing stream: {e}" # Yield error message in stream
+            logger.error(f"Error processing streaming query: {e}", exc_info=True)
+            yield {"type": "error", "content": f"处理请求时发生错误: {str(e)}"}

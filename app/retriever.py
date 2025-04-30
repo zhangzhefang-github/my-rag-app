@@ -238,18 +238,18 @@ class Retriever:
     @log_function_call
     def retrieve(self, query, top_k=3):
         """
-        Retrieve documents most relevant to the query.
+        检索与查询最相关的文档
         
         Args:
-            query: The query text.
-            top_k: Number of results to return.
+            query: 查询文本
+            top_k: 返回结果数量
             
         Returns:
-            List of most relevant document contents.
+            Tuple[List[str], List[float]]: 包含文档内容和相应分数的元组
         """
         if not self.index or self.index.ntotal == 0:
             logging.warning("Retrieval attempted but index is empty.")
-            return []
+            return [], []
             
         logging.debug(f"Encoding query for retrieval: '{query[:100]}...'")
         query_embedding = self.model.encode([query], normalize_embeddings=True)
@@ -262,18 +262,23 @@ class Retriever:
         distances, indices = self.index.search(np.array(query_embedding, dtype=np.float32), k)
         
         # Process results
-        results = []
+        docs = []
+        doc_scores = []
         retrieved_ids = []
+        
         if k > 0 and len(indices) > 0:
-            for idx in indices[0]:
+            for i, idx in enumerate(indices[0]):
                 if 0 <= idx < len(self.docs):
-                    results.append(self.docs[idx])
+                    docs.append(self.docs[idx])
+                    # 将L2距离转换为相似度分数（越小越好 -> 越大越好）
+                    similarity = 1.0 / (1.0 + float(distances[0][i]))
+                    doc_scores.append(similarity)
                     retrieved_ids.append(self.doc_ids[idx])
                 else:
                     logging.warning(f"Index search returned invalid index: {idx}")
-                    
-        logging.info(f"Query '{query[:50]}...' retrieved {len(results)} documents with IDs: {retrieved_ids}")
-        return results
+                
+        logging.info(f"Query '{query[:50]}...' retrieved {len(docs)} documents with IDs: {retrieved_ids}")
+        return docs, doc_scores
     
     @log_function_call
     def retrieve_with_metadata(self, query, top_k=3):

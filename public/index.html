@@ -3,83 +3,155 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RAG 检索增强生成应用</title>
+    <title>RAG演示系统</title>
     <style>
         body {
-            font-family: 'Arial', sans-serif;
+            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
             line-height: 1.6;
             margin: 0;
             padding: 20px;
-            background-color: #f5f5f5;
+            background-color: #f9f9f9;
             color: #333;
         }
         .container {
-            max-width: 800px;
+            max-width: 1000px;
             margin: 0 auto;
-            background-color: #fff;
             padding: 20px;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            background-color: white;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            border-radius: 8px;
         }
         h1 {
             color: #2c3e50;
             text-align: center;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 10px;
         }
-        .info-box {
-            background-color: #e8f4f8;
-            border-left: 4px solid #3498db;
+        .status-container {
+            margin-bottom: 20px;
             padding: 15px;
-            margin: 20px 0;
+            background-color: #f0f7ff;
+            border-radius: 5px;
+            border-left: 5px solid #3498db;
         }
-        .api-link {
-            margin-top: 20px;
-            padding: 10px;
-            background-color: #f8f9fa;
-            border-radius: 4px;
-            font-family: monospace;
+        .status-container h2 {
+            margin-top: 0;
+            color: #3498db;
+        }
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            margin: 10px 0;
+        }
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+        .status-ok {
+            background-color: #2ecc71;
+        }
+        .status-error {
+            background-color: #e74c3c;
+        }
+        .status-pending {
+            background-color: #f39c12;
+        }
+        footer {
+            text-align: center;
+            margin-top: 30px;
+            font-size: 0.9em;
+            color: #7f8c8d;
+        }
+        .chat-button {
+            display: block;
+            text-align: center;
+            background-color: #3498db;
+            color: white;
+            text-decoration: none;
+            padding: 15px 25px;
+            border-radius: 5px;
+            font-size: 18px;
+            margin: 30px auto;
+            max-width: 300px;
+            transition: background-color 0.3s;
+        }
+        .chat-button:hover {
+            background-color: #2980b9;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>RAG 检索增强生成应用</h1>
+        <h1>RAG检索增强生成演示系统</h1>
         
-        <div class="info-box">
-            <h2>欢迎使用</h2>
-            <p>这是一个基于RAG (检索增强生成) 技术的演示应用。该应用能够根据问题检索相关文档，并基于这些文档生成准确的回答。</p>
+        <div class="status-container">
+            <h2>系统状态</h2>
+            <div id="api-status" class="status-indicator">
+                <div id="api-dot" class="status-dot status-pending"></div>
+                <span>API服务: 检查中...</span>
+            </div>
         </div>
+
+        <p>这是RAG演示系统的基础页面。该系统提供以下功能：</p>
+        <ul>
+            <li>基于检索增强的知识问答</li>
+            <li>流式响应生成</li>
+            <li>会话上下文管理</li>
+        </ul>
         
-        <h2>API 使用说明</h2>
-        <p>本应用提供了两种查询接口：</p>
+        <a href="/static/chat.html" class="chat-button">进入聊天界面</a>
         
-        <h3>1. 标准查询</h3>
-        <div class="api-link">
-            POST /query
-        </div>
-        <p>一次性返回完整的回答和引用来源。</p>
-        
-        <h3>2. 流式查询</h3>
-        <div class="api-link">
-            POST /query/stream
-        </div>
-        <p>使用服务器发送事件 (SSE) 流式返回生成的回答。</p>
-        
-        <h3>请求示例</h3>
-        <pre>
-{
-    "query": "你的问题",
-    "top_k": 3
-}
-        </pre>
-        
-        <div class="info-box">
-            <h3>技术栈</h3>
-            <ul>
-                <li>后端: FastAPI</li>
-                <li>语言模型: OpenAI API</li>
-                <li>向量搜索: FAISS</li>
-            </ul>
-        </div>
+        <p>其他链接：</p>
+        <ul>
+            <li><a href="/api/docs" target="_blank">API文档</a> - 查看和测试API端点</li>
+        </ul>
+
+        <footer>
+            <p>© 2023 RAG演示系统 | 版本 1.0</p>
+        </footer>
     </div>
+
+    <script>
+        // 检查API状态
+        async function checkApiStatus() {
+            const apiDot = document.getElementById('api-dot');
+            const apiStatus = document.getElementById('api-status');
+            
+            try {
+                const response = await fetch('/health');
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    apiDot.className = 'status-dot status-ok';
+                    apiStatus.innerHTML = `
+                        <div class="status-dot status-ok"></div>
+                        <span>API服务: 在线 (${data.status})</span>
+                    `;
+                } else {
+                    apiDot.className = 'status-dot status-error';
+                    apiStatus.innerHTML = `
+                        <div class="status-dot status-error"></div>
+                        <span>API服务: 错误 (HTTP ${response.status})</span>
+                    `;
+                }
+            } catch (error) {
+                apiDot.className = 'status-dot status-error';
+                apiStatus.innerHTML = `
+                    <div class="status-dot status-error"></div>
+                    <span>API服务: 无法连接 (${error.message})</span>
+                `;
+            }
+        }
+
+        // 页面加载时检查状态
+        window.addEventListener('load', () => {
+            checkApiStatus();
+            // 每10秒刷新一次状态
+            setInterval(checkApiStatus, 10000);
+        });
+    </script>
 </body>
 </html> 

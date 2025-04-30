@@ -3,3 +3,29 @@ description:
 globs:
 alwaysApply: false
 ---
+# RAG组件详细说明
+
+## 检索器 (Retriever)
+
+[app/retriever.py](mdc:app/retriever.py)实现了基于语义搜索的文档检索系统：
+
+- 使用`sentence-transformers`将文档和查询转换为向量表示
+- 利用FAISS进行高效的向量相似度搜索
+- 根据相似度返回最相关的前K个文档
+
+## 生成器 (Generator)
+
+[app/generator.py](mdc:app/generator.py)处理文本生成：
+
+- 使用Hugging Face的Transformers库
+- 默认使用GPT-2模型，但可通过配置修改
+- 接收增强后的查询并生成回答
+
+## RAG管道 (RAG Pipeline)
+
+[app/rag_pipeline.py](mdc:app/rag_pipeline.py)将检索器和生成器组合起来：
+
+- 接收文档并交给检索器存储
+- 处理用户查询，先通过检索器找到相关上下文
+- 结合查询和上下文创建增强查询
+- 将增强查询送入生成器获得最终回答

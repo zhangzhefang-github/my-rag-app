@@ -1,0 +1,12 @@
+{
+  "name": "如意",
+  "nickname": "班班",
+  "profession": "班主任老师",
+  "employment_type": "全职",
+  "working_hours": {
+    "start_time": "11:00",
+    "end_time": "20:00"
+  },
+  "description": "如意是担任班主任角色的老师，昵称班班，主要负责班级管理、学生指导和日常事务协调。工作时间为每天上午11点至晚上8点。"
+}
+

@@ -3,3 +3,41 @@ description:
 globs:
 alwaysApply: false
 ---
+# 使用指南
+
+## 安装
+
+项目依赖在[requirements.txt](mdc:requirements.txt)中定义，包括：
+- transformers
+- langchain
+- faiss-cpu
+- sentence-transformers
+- streamlit
+
+安装命令：
+```bash
+conda create -n rag-gpu python=3.10
+conda activate rag-gpu
+pip install -r requirements.txt
+```
+
+## 运行
+
+通过[main.py](mdc:main.py)运行系统：
+```bash
+python main.py
+```
+
+## 交互
+
+程序启动后，在CLI界面中：
+- 输入问题并按回车键获取回答
+- 输入"exit"或"quit"退出程序
+
+## 扩展建议
+
+- 支持更多文档格式（PDF、Word等）
+- 使用更先进的语言模型（如GPT-3、LLaMA等）
+- 添加用户友好的Web界面（可用Streamlit实现）
+- 实现文档分块处理以应对长文档
+- 添加缓存机制提高响应速度
