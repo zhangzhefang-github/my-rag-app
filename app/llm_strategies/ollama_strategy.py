@@ -14,7 +14,7 @@ class OllamaStrategy(LLMStrategy):
                  host: str,
                  model: str = "qwen3:0.6b",
                  temperature: float = 0.7,
-                 num_predict: int | None = 1024):
+                 num_predict: int | None = 512):
         """
         Initializes the Ollama strategy.
 

@@ -1,0 +1,25 @@
+# requirements.in
+
+# --- Core Application ---
+fastapi
+streamlit
+uvicorn[standard]  # Includes websockets etc.
+python-dotenv
+sseclient-py       # Check if your import is sseclient or sseclient.py
+pydantic
+pyyaml
+requests
+
+# --- Langchain & LLM ---
+langchain          # Core Langchain functionality
+# langchain-core will be pulled in automatically by langchain/* packages
+langchain-ollama
+langchain-openai
+openai             # OpenAI Python client
+
+# --- Embeddings ---
+sentence-transformers # Pulls in 'transformers'
+
+# --- Development ---
+pytest
+pytest-asyncio

@@ -54,3 +54,12 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+
+# 索引文件
+data/indexes/
+
+# 文档数据 (如果源文档来自外部或不应提交)
+data/documents/
+
+# 测试缓存
+.pytest_cache/

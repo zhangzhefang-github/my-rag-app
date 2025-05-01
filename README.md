@@ -20,12 +20,19 @@ my-rag-app/
 ├── requirements.txt             # Python dependencies
 ├── .env                         # Environment configuration (create this file)
 ├── api.py                       # FastAPI application entry point
-├── config.py                    # Basic configuration loading
+├── streamlit_app.py             # Streamlit UI application entry point
 ├── app/                         # Core application logic
 │   ├── __init__.py
-│   ├── retriever.py             # Document embedding, indexing, and retrieval (Faiss + SentenceTransformer)
+│   ├── retriever.py             # Document embedding, indexing, and retrieval (Faiss + Embedding Strategies)
 │   ├── rag_pipeline.py          # RAG pipeline orchestrating retrieval and generation
-│   └── llm_service.py           # Service layer calling the selected LLM strategy
+│   └── embedding_strategies/    # Pluggable Embedding backend strategies
+│   │   ├── __init__.py
+│   │   ├── base.py              # Abstract base class for Embedding strategies
+│   │   ├── config.py            # Pydantic configuration models for embeddings
+│   │   ├── factory.py           # Factory function (get_embedder)
+│   │   ├── hf_embed.py          # Strategy for local HuggingFace models
+│   │   ├── ollama_embed.py      # Strategy for Ollama embeddings via API
+│   │   └── openai_embed.py      # Strategy for OpenAI embeddings via API
 │   └── llm_strategies/          # Pluggable LLM backend strategies
 │       ├── __init__.py          # Factory function (get_llm_strategy)
 │       ├── base.py              # Abstract base class for LLM strategies
@@ -40,30 +47,43 @@ my-rag-app/
 ├── public/                      # Static files for the frontend UI
 │   ├── index.html
 │   └── ... (assets, static js/css)
+├── tests/                       # Unit and integration tests
+│   └── ...
 └── utils/                       # Utility modules
     ├── __init__.py
     ├── env_helper.py            # Environment variable loading and parsing
     ├── gpu_manager.py           # GPU detection and info
     ├── document_manager.py      # Document loading and management
-    ├── model_utils.py           # Model loading utilities (ModelManager)
+    ├── model_utils.py           # (Deprecated) Old Model loading utilities
     └── logger.py                # Logging setup
+└── .gitignore                   # Files and directories ignored by Git
+└── LICENSE                      # Project License (MIT)
 ```
 
 ## Installation
 
-First create and activate a conda environment (or use your preferred virtual environment):
+1.  **Create Environment and Install Core Libraries:**
+    Use the `conda-env.yml` file to create the Conda environment and install core dependencies (Python, PyTorch, Faiss, NumPy) managed by Conda.
+    ```bash
+    # Ensure you have Conda installed
+    conda env create -f conda-env.yml
+    ```
+    *(Note: You might need to edit `conda-env.yml` first to select the correct `faiss-cpu` or `faiss-gpu` line and potentially adjust the `pytorch-cuda` version based on your system.)*
 
-```bash
-conda create -n rag-app python=3.10 # Or your preferred Python version
-conda activate rag-app
-```
+2.  **Activate the Environment:**
+    Activate the newly created environment (the default name is `rag-gpu`, check `conda-env.yml` if you changed it).
+    ```bash
+    conda activate rag-gpu
+    ```
 
-Install all dependencies:
+3.  **Install Application Dependencies using uv:**
+    Install the remaining Python application dependencies using `uv`. `uv` reads the `requirements.txt` file (which contains exact versions locked by the developers using `requirements.in`) and ensures your environment matches precisely.
+    ```bash
+    # uv should have been installed in the previous step via conda-env.yml
+    uv pip sync requirements.txt
+    ```
 
-```bash
-pip install -r requirements.txt
-```
-Key dependencies include: `fastapi`, `uvicorn`, `langchain`, `langchain-ollama`, `langchain-openai`, `openai`, `sentence-transformers`, `faiss-cpu` (or `faiss-gpu`), `python-dotenv`.
+Your environment is now ready!
 
 ## Configuration (.env file)
 
@@ -106,7 +126,7 @@ DOCS_DIR="data/documents"             # Directory containing source documents
 # --- System Settings ---
 LOG_LEVEL="INFO"                      # Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 # LOW_MEMORY_MODE=false              # (Currently less relevant as local generation is removed)
-# APP_PORT=8000                      # Port is now read from config.py, but can be set here too
+# APP_PORT=8000                      # Port is now read from api.py (main block) or can be set here
 ```
 
 **Important**:
@@ -119,7 +139,7 @@ LOG_LEVEL="INFO"                      # Logging level (DEBUG, INFO, WARNING, ERR
 
 *   **Retrieval Augmented Generation (RAG):** Answers questions based on provided documents.
 *   **FastAPI Backend:** Provides a robust API interface.
-*   **Efficient Semantic Search:** Uses Sentence Transformers (`moka-ai/m3e-base` default) and FAISS for finding relevant document chunks.
+*   **Efficient Semantic Search:** Uses configurable embedding strategies (HuggingFace, OpenAI, Ollama via `app/embedding_strategies`) and FAISS for finding relevant document chunks.
 *   **Pluggable LLM Backends:** Easily switch between different LLM providers (Ollama, OpenAI, Custom OpenAI-compatible API) via configuration using a Strategy Pattern (`app/llm_strategies`).
 *   **Streaming API:** Supports Server-Sent Events (SSE) for real-time answer generation (if the selected LLM strategy supports streaming).
 *   **GPU Support:** Automatically utilizes GPU for Sentence Transformer embeddings and FAISS indexing (if `faiss-gpu` is installed and GPU is available).
@@ -127,25 +147,17 @@ LOG_LEVEL="INFO"                      # Logging level (DEBUG, INFO, WARNING, ERR
 
 ### GPU Acceleration
 
-#### Installing CUDA and PyTorch
-Ensure you have compatible CUDA and cuDNN versions installed. Install the correct PyTorch version:
+GPU acceleration is primarily handled by ensuring the correct GPU versions of **PyTorch** and **Faiss** are installed during **Step 1** of the installation process via the `conda-env.yml` file.
 
-```bash
-# Example for CUDA 11.8
-# pip install torch>=2.0.0 --index-url https://download.pytorch.org/whl/cu118
-
-# Example for CUDA 12.1
-pip install torch>=2.0.0 --index-url https://download.pytorch.org/whl/cu121
-```
-*(Check PyTorch website for the correct command for your CUDA version)*
-
-#### FAISS GPU Support
-For GPU-accelerated FAISS indexing (recommended for large datasets):
-
-```bash
-pip uninstall -y faiss-cpu
-pip install faiss-gpu>=1.7.4
-```
+*   Edit `conda-env.yml` **before** running `conda env create`:
+    *   Ensure the `pytorch-cuda=XX.X` line matches your system's CUDA version.
+    *   Comment out `faiss-cpu` and uncomment `faiss-gpu`.
+*   If you need to switch between CPU and GPU versions *after* creating the environment:
+    1.  Activate the environment: `conda activate rag-gpu`
+    2.  Uninstall the incorrect Faiss version: `conda uninstall faiss-cpu` (or `faiss-gpu`)
+    3.  Install the correct Faiss version: `conda install faiss-gpu -c pytorch` (or `faiss-cpu`)
+    4.  You might also need to adjust PyTorch/CUDA versions if changing significantly.
+    5.  Re-sync pip dependencies just in case: `uv pip sync requirements.txt`
 
 ## Usage
 
@@ -172,7 +184,7 @@ Open your terminal in the project root (`my-rag-app/`) and run:
 # Start the FastAPI server using Uvicorn
 uvicorn api:app --host 0.0.0.0 --port 8000 --reload
 ```
-*(The port (8000) is default, check `config.py` or set `APP_PORT` in `.env`)*
+*(The port (8000) is default, set `APP_PORT` in `.env` or check `api.py`)*
 
 The server will start, load the embedding model, build/load the FAISS index for documents in `data/documents/`, and initialize the selected LLM strategy.
 
@@ -185,6 +197,8 @@ The server will start, load the embedding model, build/load the FAISS index for 
     *   `/query/stream` (POST): Streaming query via SSE.
     *   `/conversations/.../messages` (POST): Streaming query within a conversation context via SSE.
     *   See `/docs` for more details on all endpoints.
+
+*   **Streamlit UI (Optional):** If `streamlit_app.py` is configured and run, access it at `http://localhost:8501` (default Streamlit port).
 
 ---
 
@@ -204,15 +218,22 @@ my-rag-app/
 ├── requirements.txt             # Python 依赖库
 ├── .env                         # 环境变量配置文件 (需自行创建)
 ├── api.py                       # FastAPI 应用入口点
-├── config.py                    # 基础配置加载
+├── streamlit_app.py             # Streamlit UI 应用入口点
 ├── app/                         # 核心应用逻辑
 │   ├── __init__.py
-│   ├── retriever.py             # 文档嵌入、索引和检索 (Faiss + SentenceTransformer)
+│   ├── retriever.py             # 文档嵌入、索引和检索 (Faiss + Embedding Strategies)
 │   ├── rag_pipeline.py          # RAG 流水线，协调检索和生成
-│   └── llm_service.py           # 调用所选 LLM 策略的服务层
+│   └── embedding_strategies/    # 可插拔的 Embedding 后端策略
+│   │   ├── __init__.py
+│   │   ├── base.py              # Embedding 策略的抽象基类
+│   │   ├── config.py            # Embedding 的 Pydantic 配置模型
+│   │   ├── factory.py           # 工厂函数 (get_embedder)
+│   │   ├── hf_embed.py          # 本地 HuggingFace 模型策略
+│   │   ├── ollama_embed.py      # 通过 API 调用 Ollama Embedding 的策略
+│   │   └── openai_embed.py      # 通过 API 调用 OpenAI Embedding 的策略
 │   └── llm_strategies/          # 可插拔的 LLM 后端策略
-│       ├── __init__.py          # 工厂函数 (get_llm_strategy)
-│       ├── base.py              # LLM 策略的抽象基类
+│       ├── __init__.py          # Factory function (get_llm_strategy)
+│       ├── base.py              # Abstract base class for LLM strategies
 │       ├── ollama_strategy.py   # 通过 LangChain 与本地 Ollama 模型交互的策略
 │       ├── openai_strategy.py   # 通过 LangChain 调用 OpenAI API 的策略
 │       └── custom_api_strategy.py # 使用 openai 库调用自定义 OpenAI 兼容 API 的策略
@@ -224,34 +245,47 @@ my-rag-app/
 ├── public/                      # 前端 UI 静态文件
 │   ├── index.html
 │   └── ... (assets, static js/css)
+├── tests/                       # 单元测试和集成测试
+│   └── ...
 └── utils/                       # 工具模块
     ├── __init__.py
     ├── env_helper.py            # 环境变量加载与解析
     ├── gpu_manager.py           # GPU 检测与信息
     ├── document_manager.py      # 文档加载与管理
-    ├── model_utils.py           # 模型加载工具 (ModelManager)
+    ├── model_utils.py           # (已弃用) 旧的模型加载工具
     └── logger.py                # 日志配置
+└── .gitignore                   # Git 忽略的文件和目录
+└── LICENSE                      # 项目许可证 (MIT)
 ```
 
 ## 安装
 
-首先创建并激活 conda 环境（或使用您偏好的虚拟环境）：
+1.  **创建环境并安装核心库:**
+    使用 `conda-env.yml` 文件创建 Conda 环境并安装由 Conda 管理的核心依赖（Python, PyTorch, Faiss, NumPy）。
+    ```bash
+    # 确保已安装 Conda
+    conda env create -f conda-env.yml
+    ```
+    *(注意: 您可能需要先编辑 `conda-env.yml` 文件，选择正确的 `faiss-cpu` 或 `faiss-gpu` 行，并可能需要根据您的系统调整 `pytorch-cuda` 版本。)*
 
-```bash
-conda create -n rag-app python=3.10 # 或您偏好的 Python 版本
-conda activate rag-app
-```
+2.  **激活环境:**
+    激活新创建的环境（默认名称为 `rag-gpu`，如果您修改了 `conda-env.yml`，请检查其中的名称）。
+    ```bash
+    conda activate rag-gpu
+    ```
 
-安装所有依赖：
+3.  **使用 uv 安装应用依赖:**
+    使用 `uv` 安装剩余的 Python 应用依赖。`uv` 会读取 `requirements.txt` 文件（其中包含开发者使用 `requirements.in` 锁定的精确版本），并确保您的环境与之精确匹配。
+    ```bash
+    # uv 应已在上一步通过 conda-env.yml 安装
+    uv pip sync requirements.txt
+    ```
 
-```bash
-pip install -r requirements.txt
-```
-关键依赖包括: `fastapi`, `uvicorn`, `langchain`, `langchain-ollama`, `langchain-openai`, `openai`, `sentence-transformers`, `faiss-cpu` (或 `faiss-gpu`), `python-dotenv`。
+环境现已准备就绪！
 
 ## 配置 (.env 文件)
 
-在项目根目录 (`my-rag-app/`) 创建一个名为 `.env` 的文件来配置应用程序。请参考以下模板：
+Create a `.env` file in the project root directory (`my-rag-app/`) to configure the application. Use the following template:
 
 ```dotenv
 # --- LLM 提供商选择 ---
@@ -290,7 +324,7 @@ DOCS_DIR="data/documents"             # 包含源文档的目录
 # --- 系统设置 ---
 LOG_LEVEL="INFO"                      # 日志级别 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 # LOW_MEMORY_MODE=false              # (目前关联性较低，因为本地生成已移除)
-# APP_PORT=8000                      # 端口现在从 config.py 读取, 但也可在此处设置
+# APP_PORT=8000                      # 端口现在从 api.py (主代码块) 读取, 但也可在此处设置
 ```
 
 **重要提示**:
@@ -303,33 +337,25 @@ LOG_LEVEL="INFO"                      # 日志级别 (DEBUG, INFO, WARNING, ERRO
 
 *   **检索增强生成 (RAG):** 基于提供的文档回答问题。
 *   **FastAPI 后端:** 提供健壮的 API 接口。
-*   **高效语义搜索:** 使用 Sentence Transformers (默认为 `moka-ai/m3e-base`) 和 FAISS 查找相关的文档片段。
-*   **可插拔 LLM 后端:** 使用策略模式 (`app/llm_strategies`)，通过配置轻松切换不同的 LLM 提供商 (Ollama, OpenAI, 自定义 OpenAI 兼容 API)。
+*   **高效语义检索:** 使用可配置的 Embedding 策略 (HuggingFace, OpenAI, Ollama, 通过 `app/embedding_strategies`) 和 FAISS 查找相关文档块。
+*   **可插拔 LLM 后端:** 通过配置轻松切换不同的 LLM 提供者 (Ollama, OpenAI, 自定义 OpenAI 兼容 API)，使用策略模式 (`app/llm_strategies`)。
 *   **流式 API:** 支持 Server-Sent Events (SSE) 以实现实时答案生成 (如果所选的 LLM 策略支持流式传输)。
 *   **GPU 支持:** 自动利用 GPU 进行 Sentence Transformer 嵌入和 FAISS 索引（如果安装了 `faiss-gpu` 且 GPU 可用）。
 *   **简单 Web UI:** 包含一个基本的前端界面 (`/public`) 用于交互。
 
 ### GPU 加速
 
-#### 安装 CUDA 和 PyTorch
-确保安装了兼容的 CUDA 和 cuDNN 版本。安装正确的 PyTorch 版本：
+GPU 加速主要通过确保在安装过程的 **步骤 1** 中，通过 `conda-env.yml` 文件安装了正确 GPU 版本的 **PyTorch** 和 **Faiss** 来处理。
 
-```bash
-# CUDA 11.8 示例
-# pip install torch>=2.0.0 --index-url https://download.pytorch.org/whl/cu118
-
-# CUDA 12.1 示例
-pip install torch>=2.0.0 --index-url https://download.pytorch.org/whl/cu121
-```
-*(请检查 PyTorch 官网以获取适合您 CUDA 版本的正确命令)*
-
-#### FAISS GPU 支持
-要使用 GPU 加速 FAISS 索引（推荐用于大型数据集）：
-
-```bash
-pip uninstall -y faiss-cpu
-pip install faiss-gpu>=1.7.4
-```
+*   在运行 `conda env create` **之前**编辑 `conda-env.yml`：
+    *   确保 `pytorch-cuda=XX.X` 行与您系统的 CUDA 版本匹配。
+    *   注释掉 `faiss-cpu` 并取消注释 `faiss-gpu`。
+*   如果需要在创建环境*后*切换 CPU 和 GPU 版本：
+    1.  激活环境: `conda activate rag-gpu`
+    2.  卸载错误的 Faiss 版本: `conda uninstall faiss-cpu` (或 `faiss-gpu`)
+    3.  安装正确的 Faiss 版本: `conda install faiss-gpu -c pytorch` (或 `faiss-cpu`)
+    4.  如果 CUDA 版本等有较大变化，可能也需要调整 PyTorch 版本。
+    5.  为确保一致性，重新同步 pip 依赖: `uv pip sync requirements.txt`
 
 ## 使用方法
 
@@ -356,16 +382,18 @@ pip install faiss-gpu>=1.7.4
 # 使用 Uvicorn 启动 FastAPI 服务器
 uvicorn api:app --host 0.0.0.0 --port 8000 --reload
 ```
-*(端口号 (8000) 是默认值，请检查 `config.py` 或在 `.env` 中设置 `APP_PORT`)*
+*(端口号 (8000) 是默认值, 请在 `.env` 中设置 `APP_PORT` 或查看 `api.py`)*
 
 服务器将启动，加载嵌入模型，为 `data/documents/` 中的文档构建或加载 FAISS 索引，并初始化所选的 LLM 策略。
 
-### 4. 交互
+### 4. Interact
 
-*   **Web UI:** 打开浏览器并访问 `http://localhost:8000/ui`。
+*   **Web UI:** 打开浏览器并访问 `http://localhost:8000/ui`.
 *   **API 文档:** 在 `http://localhost:8000/docs` 访问交互式 API 文档 (Swagger UI)。您可以在此处测试 API 端点。
 *   **API 端点:**
     *   `/query` (POST): 非流式查询。
     *   `/query/stream` (POST): 通过 SSE 进行流式查询。
     *   `/conversations/.../messages` (POST): 在会话上下文中通过 SSE 进行流式查询。
     *   请参阅 `/docs` 获取所有端点的更多详细信息。
+
+*   **Streamlit UI (可选):** 如果 `streamlit_app.py` 已配置并运行，请在 `http://localhost:8501` (默认 Streamlit 端口) 访问它。
