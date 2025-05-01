@@ -7,6 +7,7 @@ from datetime import datetime
 from utils.env_helper import load_env_config # Reuse env loading
 import aiohttp
 import logging
+import re # <<< Add import re
 
 # --- Logger Setup ---
 # Configure logging (optional, basic config shown)
@@ -14,19 +15,49 @@ import logging
 logger = logging.getLogger(__name__) # <<< Get logger instance
 
 # --- Configuration ---
-# Load .env file to get API port if defined
-load_env_config()
+# 使用 session_state 确保环境变量只加载一次
+if 'env_loaded' not in st.session_state or not st.session_state.env_loaded:
+    load_env_config()
+    st.session_state.env_loaded = True
+    # 可以在这里加一个日志，只打印一次
+    logger.info("已加载环境变量 (首次加载)。") 
+
 API_HOST = os.environ.get("API_HOST", "localhost") # Allow overriding host
-# Get port from config.py default or .env
-try:
-    from config import APP_PORT
-    API_PORT = int(os.environ.get("APP_PORT", APP_PORT))
-except (ImportError, ValueError):
-    API_PORT = 8000 # Default if config/env loading fails
+# --- 读取 APP_PORT --- 
+# Get port directly from environment or use default
+API_PORT = int(os.getenv("APP_PORT", 8000))
+# --- 结束读取 --- 
 
 API_STREAM_URL = f"http://{API_HOST}:{API_PORT}/query/stream"
 API_QUERY_URL = f"http://{API_HOST}:{API_PORT}/query" # For fetching sources later if needed
 API_CONVERSATIONS_URL = f"http://{API_HOST}:{API_PORT}/conversations"
+
+# --- Frontend Parser Function (copied from api.py) ---
+def parse_llm_output_frontend(raw_output: str) -> tuple[str | None, str]:
+    """Parses raw LLM output, extracting <think> block and main answer.
+    
+    Args:
+        raw_output: The raw string output from the LLM (potentially a chunk).
+        
+    Returns:
+        A tuple containing: (think_content, answer_content)
+        think_content is None if no <think> block is found.
+        answer_content is the part of the raw_output outside the think block.
+    """
+    think_content = None
+    answer_content = raw_output # Default to the full output
+    
+    # Use regex to find and extract <think> block (non-greedy)
+    match = re.search(r"<think>(.*?)</think>", raw_output, flags=re.DOTALL)
+    if match:
+        think_content = match.group(1).strip() # Get content inside tags
+        # Remove the think block and surrounding whitespace from the answer
+        answer_content = re.sub(r"<think>.*?</think>", "", raw_output, flags=re.DOTALL).strip()
+        # Optional: remove leading newline if present after removal
+        answer_content = re.sub(r"^\s*\n", "", answer_content) 
+        
+    return think_content, answer_content
+# --- End Parser Function ---
 
 # --- API Client Functions ---
 def get_backend_error_message(response: requests.Response) -> str:
@@ -132,6 +163,13 @@ if "pending_delete_id" not in st.session_state:
     st.session_state.pending_delete_id = None
 if "show_uploader" not in st.session_state: # <<< Initialize show_uploader state
     st.session_state.show_uploader = False
+if "think_displayed" not in st.session_state: # <<< Add flag for think block
+    st.session_state.think_displayed = False
+# <<< Add state for parsing think block >>>
+if "parsing_think_block" not in st.session_state:
+    st.session_state.parsing_think_block = False
+if "current_think_content" not in st.session_state:
+    st.session_state.current_think_content = ""
 
 # --- Sidebar --- 
 st.sidebar.title("导航与设置")
@@ -334,9 +372,6 @@ if st.session_state.get("show_uploader", False):
     #         st.session_state.show_uploader = False  # Hide the uploader
     #         st.session_state.main_uploader_has_files = False # Reset the tracker
     #         st.rerun() # Rerun to reflect the hidden state
-    #     else:
-    #         # No files selected, and none were previously tracked
-    #         st.session_state.main_uploader_has_files = False # Correct indentation
     pass # Add pass to avoid empty block if needed
 
 # --- User Input Area ---
@@ -376,6 +411,10 @@ if query:
         answer_placeholder = st.empty()
         time_info = st.empty()
         full_answer = ""
+        # Reset states for the new response stream
+        st.session_state.think_displayed = False 
+        st.session_state.parsing_think_block = False 
+        st.session_state.current_think_content = "" 
         error_occurred = False
         start_time = time.time()
         first_token_time = None
@@ -385,16 +424,11 @@ if query:
         try:
             status.update(label=f"向对话 {current_cid[:8]} 发送消息...", state="running")
             
-            # --- Call the new message sending logic --- 
-            # This part needs the implementation of send_message_in_conversation
-            # For now, let's adapt the previous streaming logic directly here
-            # We will move it to the function later for cleaner code
-            
             message_payload = {
                 "conversation_id": current_cid,
                 "content": query, 
                 "role": "user"
-            } # Payload for the backend
+            } 
             message_stream_url = f"{API_CONVERSATIONS_URL}/{current_cid}/messages"
             headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
             
@@ -405,91 +439,159 @@ if query:
                 for line in response.iter_lines(decode_unicode=True):
                     current_time = time.time()
                     elapsed = current_time - start_time
-                    time_info.caption(f"⏱️ 已用时: {elapsed:.2f}秒")
                     
                     if line.startswith("event: error"):
                         try:
-                            error_data = json.loads(line.split("data: ", 1)[1])
-                            st.error(f"流处理错误: {error_data.get('detail', '未知流错误')}")
-                        except:
-                             st.error(f"流处理错误，原始信息: {line}")
+                            error_data_str = line.split("data: ", 1)[1] # Get data part after "data: "
+                            error_data = json.loads(error_data_str)
+                            detail = error_data.get('detail', '未知流错误')
+                            # Display error in the answer placeholder temporarily
+                            answer_placeholder.error(f"流处理错误: {detail}")
+                            logger.error(f"SSE Error Event: {detail}")
+                        except (IndexError, json.JSONDecodeError) as e:
+                             error_msg = f"流处理错误，无法解析: {line}"
+                             answer_placeholder.error(error_msg)
+                             logger.error(error_msg + f" | Exception: {e}")
                         error_occurred = True
-                        break
+                        status.update(label="流处理出错", state="error", expanded=True)
+                        # Don't break here yet, wait for potential 'end' event or stream close
+                        
                     elif line.startswith("event: end"):
-                        try:
-                            end_data_str = line.split("data: ", 1)[1]
-                            end_data = json.loads(end_data_str)
-                            token_count = end_data.get('tokens', token_count) # Get token count from end event if available
-                        except:
-                            pass
+                        logger.info(f"SSE End Event received: {line}")
                         status.update(label="流处理完成.", state="complete", expanded=False)
-                        break
+                        break # Simply break the loop on end event
+
                     elif line.startswith("data:"):
                         try:
                             data_str = line.split("data: ", 1)[1]
                             data = json.loads(data_str)
-                            token = data.get("token", "")
-                            if token:
+                            raw_token = data.get("token", "") 
+                            
+                            if raw_token:
+                                token_count += 1 
                                 if first_token_time is None:
                                     first_token_time = current_time
-                                    first_token_elapsed = current_time - start_time
-                                full_answer += token
-                                # Keep UI update outside the loop
-                            # else: Handle potential non-token data?
+                                
+                                processed_chunk_for_answer = ""
+                                remaining_token_part = raw_token
+                                
+                                while remaining_token_part:
+                                    if not st.session_state.parsing_think_block:
+                                        start_tag_pos = remaining_token_part.find("<think>")
+                                        if start_tag_pos == -1:
+                                            processed_chunk_for_answer += remaining_token_part
+                                            remaining_token_part = "" 
+                                        else:
+                                            processed_chunk_for_answer += remaining_token_part[:start_tag_pos]
+                                            # <<< Log state change >>>
+                                            logger.debug("Entering think block parsing state.")
+                                            st.session_state.parsing_think_block = True
+                                            st.session_state.current_think_content = "" 
+                                            remaining_token_part = remaining_token_part[start_tag_pos + len("<think>"):]
+                                    else: # Inside think block
+                                        end_tag_pos = remaining_token_part.find("</think>")
+                                        if end_tag_pos == -1:
+                                            st.session_state.current_think_content += remaining_token_part
+                                            # <<< Log accumulation >>>
+                                            logger.debug(f"Accumulated think content chunk: {repr(remaining_token_part)}")
+                                            remaining_token_part = "" 
+                                        else:
+                                            think_chunk_before_end = remaining_token_part[:end_tag_pos]
+                                            st.session_state.current_think_content += think_chunk_before_end
+                                            # <<< Log end found and content before display >>>
+                                            logger.debug(f"Found </think>. Final accumulated content: {repr(st.session_state.current_think_content)}")
+                                            
+                                            # Display expander directly (only once)
+                                            if not st.session_state.think_displayed:
+                                                logger.debug("Attempting to display expander directly.")
+                                                try:
+                                                    # Render expander directly in the chat message area
+                                                    with st.expander("思考过程", expanded=False):
+                                                        st.markdown(f'<div style="color: gray; font-size: 0.8em;">{st.session_state.current_think_content}</div>', unsafe_allow_html=True)
+                                                    st.session_state.think_displayed = True
+                                                    logger.debug("Expander displayed directly and think_displayed set to True.")
+                                                except Exception as display_e:
+                                                    logger.error(f"Error displaying expander: {display_e}", exc_info=True)
+                                            else:
+                                                 logger.debug("Expander already displayed, skipping.")
+                                                 
+                                            st.session_state.parsing_think_block = False # Exit think state
+                                            remaining_token_part = remaining_token_part[end_tag_pos + len("</think>"):] 
+                                            # <<< Log state change and remaining part >>>
+                                            logger.debug(f"Exiting think block parsing state. Remaining token part: {repr(remaining_token_part)}")
+                                
+                                # Append the processed answer part 
+                                if processed_chunk_for_answer:
+                                    full_answer += processed_chunk_for_answer
+                                    # Only update the answer placeholder here
+                                    answer_placeholder.markdown(full_answer + "▌") 
+                                
                         except (IndexError, json.JSONDecodeError) as e:
-                            st.warning(f"无法解析流数据: {line}. 错误: {e}")
-                            continue
+                            logger.warning(f"无法解析流数据: {line}. 错误: {e}")
+                            continue 
                             
-            # --- End of adapted streaming logic ---
+                # --- End of loop ---
+                # Final check: If stream ends while still parsing think block (error?)
+                if st.session_state.parsing_think_block and not st.session_state.think_displayed:
+                     logger.warning("Stream ended while inside a think block without closing tag.")
+                     # Optionally display incomplete think block?
+                     # with think_container.container():
+                     #    with st.expander("思考过程 (未结束)", expanded=True):
+                     #        st.markdown(f'<div style="color: orange; font-size: 0.9em;">{st.session_state.current_think_content}</div>', unsafe_allow_html=True)
+                     pass # Decide how to handle this
 
-            # Calculate timings
+            # Calculate final timings
             end_time = time.time()
             total_elapsed = end_time - start_time
             tokens_per_second = token_count / total_elapsed if total_elapsed > 0 and token_count > 0 else 0
-            first_token_latency = (first_token_time - start_time) if first_token_time else total_elapsed # If no token, latency is total time
+            first_token_latency = (first_token_time - start_time) if first_token_time else total_elapsed 
             
             if first_token_time:
                  time_info_text = (
                      f"⏱️ 总耗时: {total_elapsed:.2f}秒 | "
                      f"首token延迟: {first_token_latency:.2f}秒 | "
-                     f"速度: {tokens_per_second:.1f} token/秒 | "
+                     f"速度: {tokens_per_second:.1f} token/秒 ({token_count} tokens) | " # Added token count
                      f"开始于: {start_datetime}"
                  )
             else:
-                 time_info_text = f"⏱️ 总耗时: {total_elapsed:.2f}秒 (未收到token)"
+                 # Case where no tokens were received (maybe only think or error)
+                 time_info_text = f"⏱️ 总耗时: {total_elapsed:.2f}秒 (未收到答案 token)"
 
-            # Update UI and session state after the loop
-            if not error_occurred and full_answer:
-                 answer_placeholder.markdown(full_answer) 
-                 time_info.caption(time_info_text)
-                 st.session_state.messages.append({
-                     "role": "assistant", 
-                     "content": full_answer,
-                     "response_time": time_info_text
-                     # Backend might provide 'id' and 'created_at', consider adding if needed
-                 })
-                 # Refresh conversation list to get updated timestamp
-                 st.session_state.conversation_list = get_conversations()
-                 st.rerun() # Rerun to ensure sidebar shows updated list order
-                 
-            elif not error_occurred and not full_answer:
-                answer_placeholder.warning("收到空回复。")
-                time_info.caption(time_info_text)
-                # Optionally add empty assistant message? Depends on desired behavior
-                
-            elif error_occurred:
-                 answer_placeholder.error("获取完整回复时发生流错误。")
-                 # Error message already shown in stream, no need to add to history again?
+            # Final UI update and state saving
+            if not error_occurred:
+                if full_answer:
+                    answer_placeholder.markdown(full_answer) # Final answer to placeholder
+                    time_info.caption(time_info_text) 
+                    # Append final answer to session state
+                    st.session_state.messages.append({
+                        "role": "assistant", 
+                        "content": full_answer, # Saved answer is already clean
+                        "response_time": time_info_text 
+                    })
+                    # Fetch updated list, but don't rerun immediately
+                    st.session_state.conversation_list = get_conversations() 
+                elif st.session_state.think_displayed: # If only think was displayed
+                    answer_placeholder.info("模型进行了思考，但未生成最终回复。") # Use placeholder
+                    time_info.caption(time_info_text)
+                else: # No error, no think, no answer
+                    answer_placeholder.warning("收到空回复。") # Use placeholder
+                    time_info.caption(time_info_text)
+
+            # If error occurred, the message should already be in answer_placeholder
+            # Do not append error message to history automatically unless desired
 
         except requests.exceptions.RequestException as e:
-            st.error(f"连接错误: 无法连接到 API ({message_stream_url}). 详情: {e}")
+            error_msg = f"连接错误: 无法连接到 API ({message_stream_url}). 详情: {e}"
+            st.error(error_msg)
             answer_placeholder.empty()
             status.update(label="连接失败.", state="error", expanded=True)
+            logger.error(error_msg)
         except Exception as e:
-            st.error(f"发生意外错误: {e}")
+            error_msg = f"发生意外错误: {e}"
+            st.error(error_msg)
             answer_placeholder.empty()
             status.update(label="处理错误.", state="error", expanded=True)
-            error_occurred = True
+            logger.error(error_msg, exc_info=True) # Log stack trace for unexpected errors
         
     # --- End: Modified Input Handling ---
     

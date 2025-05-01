@@ -9,64 +9,88 @@ import os
 import json
 import logging
 from utils.gpu_manager import GPUManager
-from utils.model_utils import ModelManager, ensure_dir_exists
+from utils.model_utils import ensure_dir_exists
 from utils.document_manager import DocumentManager
 from utils.logger import log_function_call
+from app.embedding_strategies.config import EmbeddingConfig
+from app.embedding_strategies.factory import get_embedder
+from app.embedding_strategies.base import EmbeddingStrategy
 
 class Retriever:
     """Vector retriever responsible for document vectorization and similarity search"""
     
-    def __init__(self, model_name: str, use_gpu: bool, 
-                 local_model_dir: str, index_dir: str,
+    def __init__(self,
+                 embedding_config: EmbeddingConfig,
+                 index_dir: str,
                  docs_dir: str):
         """
         Initialize the Retriever.
         
         Args:
-            model_name: Name of the embedding model to use.
-            use_gpu: Whether to use GPU if available.
-            local_model_dir: Directory for storing/caching local models.
+            embedding_config: Configuration object for the embedding strategy.
             index_dir: Directory to store Faiss index and document mapping files.
             docs_dir: Directory containing the original source documents.
         """
-        logging.info(f"Initializing Retriever with config: model_name='{model_name}', use_gpu={use_gpu}, local_model_dir='{local_model_dir}', index_dir='{index_dir}', docs_dir='{docs_dir}'")
-        self.model_name = model_name
-        self.use_gpu = use_gpu
-        self.local_model_dir = local_model_dir
+        # Log the embedding config safely (excluding sensitive info if possible)
+        safe_config_dump = embedding_config.config.model_dump(exclude={'api_key'})
+        logging.info(f"Initializing Retriever with config: embedding_provider={embedding_config.config.provider}, index_dir='{index_dir}', docs_dir='{docs_dir}', embedding_config={safe_config_dump}")
+
+        self.embedding_config = embedding_config
         self.index_dir = index_dir
         self.docs_dir = docs_dir
         
         # Get manager instances
         self.gpu_manager = GPUManager()
-        self.model_manager = ModelManager()
-        # Initialize DocumentManager specific to this retriever's docs_dir
         self.document_manager = DocumentManager(docs_dir=self.docs_dir)
         
         # Ensure index directory exists
         logging.debug(f"Ensuring index directory exists: {index_dir}")
         ensure_dir_exists(index_dir)
         
-        # Generate safe filename for the model
-        self.model_name_safe = model_name.replace('/', '_')
+        # --- Initialize Embedder using the factory ---
+        logging.info("Initializing embedding strategy...")
+        try:
+            self.embedder: EmbeddingStrategy = get_embedder(embedding_config)
+            # Extract model name or path for file naming (best effort)
+            if hasattr(embedding_config.config, 'model_path'):
+                 # Primarily for HF models
+                 model_identifier = embedding_config.config.model_path
+            elif hasattr(embedding_config.config, 'model'):
+                 # For OpenAI, Ollama models
+                 model_identifier = embedding_config.config.model
+            else:
+                 model_identifier = embedding_config.config.provider # Fallback
+            self.model_name_safe = model_identifier.replace('/', '_').replace(':','_') # Make it safe for filename
+            logging.info(f"Embedding strategy initialized for provider: {embedding_config.config.provider}")
+        except Exception as e:
+            logging.error(f"Failed to initialize embedding strategy: {e}", exc_info=True)
+            raise RuntimeError(f"Could not initialize embedder: {e}") from e
+        # --- End Embedder Initialization ---
+        
+        # Generate safe filename for the index based on model identifier
         self.index_file = os.path.join(index_dir, f"{self.model_name_safe}.index")
         self.docs_file = os.path.join(index_dir, f"{self.model_name_safe}.docs.json")
         logging.debug(f"Index file path: {self.index_file}")
         logging.debug(f"Docs mapping file path: {self.docs_file}")
         
-        # Load the embedding model
-        logging.info(f"Loading embedding model: '{model_name}'")
-        self.model = self.model_manager.load_sentence_transformer(
-            model_name=self.model_name,
-            use_gpu=self.use_gpu,
-            local_model_dir=self.local_model_dir
-        )
-        logging.info(f"Embedding model '{model_name}' loaded successfully.")
+        # --- Determine Embedding Dimension ---
+        # This is now tricky as EmbeddingStrategy doesn't have a get_dimension method yet.
+        # Option 1: Try embedding a dummy text to get the dimension.
+        # Option 2: Add a get_dimension method to the EmbeddingStrategy interface and implementations.
+        # Option 3: Make dimension configurable or assume a default and resize Faiss index later.
+        # Let's try Option 1 for now, but Option 2 is cleaner long-term.
+        try:
+            logging.info("Determining embedding dimension...")
+            dummy_embedding = self.embedder.embed(["dimension_test"])
+            self.embedding_dim = len(dummy_embedding[0])
+            logging.info(f"Determined embedding dimension: {self.embedding_dim}")
+        except Exception as e:
+            logging.error(f"Could not determine embedding dimension automatically: {e}. You might need to configure Faiss index dimension manually or enhance EmbeddingStrategy.", exc_info=True)
+            # Fallback or raise error? Let's raise for now.
+            raise RuntimeError(f"Failed to determine embedding dimension: {e}") from e
+        # --- End Dimension Determination ---
         
-        # Get embedding dimension
-        self.embedding_dim = self.model.get_sentence_embedding_dimension()
-        logging.info(f"Embedding dimension: {self.embedding_dim}")
-        
-        # Load or create the index
+        # Load or create the index (using the determined dimension)
         logging.info("Loading or creating FAISS index...")
         self._load_index()
         logging.info("FAISS index ready.")
@@ -81,8 +105,13 @@ class Retriever:
             try:
                 logging.info(f"Attempting to load existing index from: {self.index_file}")
                 self.index = faiss.read_index(self.index_file)
-                logging.info(f"Successfully loaded index.")
+                logging.info(f"Successfully loaded index. Dimension: {self.index.d}, Is Trained: {self.index.is_trained}, Total vectors: {self.index.ntotal}")
                 
+                # Check if loaded index dimension matches the current model's dimension
+                if self.index.d != self.embedding_dim:
+                    logging.warning(f"Loaded index dimension ({self.index.d}) does not match current embedding dimension ({self.embedding_dim}). Rebuilding index.")
+                    raise ValueError("Index dimension mismatch")
+                    
                 logging.info(f"Attempting to load document mapping from: {self.docs_file}")
                 with open(self.docs_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
@@ -92,6 +121,7 @@ class Retriever:
                 # Load document content using DocumentManager
                 logging.info(f"Loading content for {len(self.doc_ids)} documents...")
                 loaded_count = 0
+                missing_ids = []
                 for doc_id in self.doc_ids:
                     content = self.document_manager.get_document(doc_id)
                     if content:
@@ -99,16 +129,23 @@ class Retriever:
                         loaded_count += 1
                     else:
                         logging.warning(f"Could not load document content for ID: {doc_id}")
+                        missing_ids.append(doc_id) # Keep track of missing ones
+
+                if missing_ids:
+                     logging.warning(f"Failed to load content for {len(missing_ids)} document IDs. Index may be stale.")
+                     # Decide on recovery strategy: rebuild, remove missing, or just warn?
+                     # For now, let's continue but log the warning prominently.
+
                 logging.info(f"Successfully loaded content for {loaded_count}/{len(self.doc_ids)} documents.")
                 
-                if len(self.docs) != len(self.doc_ids):
-                    logging.warning(f"Document count mismatch after loading: {len(self.docs)} content vs {len(self.doc_ids)} IDs. Index may need rebuild.")
-                    # Reset and force creation of a new index
-                    raise ValueError("Document count mismatch")
-                    
+                # Check consistency between loaded docs and index size
+                if self.index.ntotal != loaded_count:
+                    logging.warning(f"Loaded document count ({loaded_count}) does not match Faiss index size ({self.index.ntotal}). Index might be corrupted or partially loaded. Rebuilding index.")
+                    raise ValueError("Document count vs Index size mismatch")
+
                 logging.info(f"Successfully loaded existing index and documents. Total documents: {len(self.docs)}")
             except Exception as e:
-                logging.error(f"Failed to load existing index or documents: {e}. Creating a new index.")
+                logging.error(f"Failed to load existing index or documents: {e}. Creating a new index.", exc_info=True)
                 # Create new index
                 self.index = faiss.IndexFlatL2(self.embedding_dim)
                 self.docs = []
@@ -119,6 +156,8 @@ class Retriever:
         
         # Move index to GPU if possible
         logging.debug("Attempting to move index to GPU if available...")
+        # Check GPU availability based on embedding config, not a separate flag
+        self.use_gpu = self.embedding_config.config.use_gpu if hasattr(self.embedding_config.config, 'use_gpu') else False
         self._move_index_to_gpu_if_available()
         
     @log_function_call 
@@ -126,8 +165,9 @@ class Retriever:
         """Move the FAISS index to GPU if configured and possible."""
         self.on_gpu = False
         
+        # Check if embedder is configured to use GPU (best effort check)
         if not self.use_gpu:
-            logging.info("GPU usage is disabled by configuration.")
+            logging.info("GPU usage is disabled by embedding configuration (or default).")
             return
             
         if not torch.cuda.is_available():
@@ -219,16 +259,29 @@ class Retriever:
             logging.error(f"Mismatch between document count ({len(documents)}) and ID count ({len(doc_ids)}). Aborting add.")
             raise ValueError(f"Document count and ID count mismatch: {len(documents)} != {len(doc_ids)}")
             
-        logging.info(f"Creating embeddings for {len(documents)} documents...")
-        # Consider adding batching for large numbers of documents if encode supports it well
-        embeddings = self.model.encode(documents, normalize_embeddings=True) # Normalize for L2 index
-        logging.info("Embeddings created.")
+        logging.info(f"Creating embeddings for {len(documents)} documents using {self.embedding_config.config.provider} strategy...")
+        # --- Use the embedder strategy ---
+        try:
+            # Consider adding batching logic here if embedder handles it poorly
+            # Note: Faiss IndexFlatL2 uses L2 distance, prefers normalized embeddings.
+            # SentenceTransformer usually normalizes by default. Check other strategies.
+            # Assuming embedder handles normalization or strategy includes it if needed.
+            embeddings = self.embedder.embed(documents)
+            # Convert to numpy float32 for Faiss
+            embeddings_np = np.array(embeddings, dtype=np.float32)
+            # Normalize embeddings here if the strategy doesn't guarantee it
+            faiss.normalize_L2(embeddings_np)
+            logging.info("Embeddings created and normalized.")
+        except Exception as e:
+             logging.error(f"Failed to create embeddings: {e}", exc_info=True)
+             raise RuntimeError(f"Embedding creation failed: {e}") from e
+        # --- End using embedder ---
         
-        logging.info(f"Adding {len(embeddings)} embeddings to the FAISS index...")
-        self.index.add(np.array(embeddings, dtype=np.float32))
+        logging.info(f"Adding {len(embeddings_np)} embeddings to the FAISS index...")
+        self.index.add(embeddings_np) # Add the numpy array
         self.docs.extend(documents)
         self.doc_ids.extend(doc_ids)
-        logging.info(f"{len(embeddings)} embeddings added. Index now contains {self.index.ntotal} vectors.")
+        logging.info(f"{len(embeddings_np)} embeddings added. Index now contains {self.index.ntotal} vectors.")
         
         # Save the updated index
         self.save_index()
@@ -236,49 +289,56 @@ class Retriever:
         return len(documents)
     
     @log_function_call
-    def retrieve(self, query, top_k=3):
+    def retrieve(self, query: str, top_k: int = 3):
         """
-        检索与查询最相关的文档
+        Retrieve the most relevant documents for a given query.
         
         Args:
-            query: 查询文本
-            top_k: 返回结果数量
+            query: The query text.
+            top_k: The number of results to return.
             
         Returns:
-            Tuple[List[str], List[float]]: 包含文档内容和相应分数的元组
+            Tuple[List[str], List[float]]: Tuple containing document contents and corresponding scores.
         """
         if not self.index or self.index.ntotal == 0:
-            logging.warning("Retrieval attempted but index is empty.")
-            return [], []
-            
-        logging.debug(f"Encoding query for retrieval: '{query[:100]}...'")
-        query_embedding = self.model.encode([query], normalize_embeddings=True)
+            logging.warning("Attempted to retrieve from an empty or non-existent index.")
+            return [], [] # Return empty lists
         
-        # Ensure k is not greater than the number of documents in the index
-        k = min(top_k, self.index.ntotal)
-        logging.debug(f"Searching index for top {k} documents.")
+        logging.info(f"Creating embedding for query: '{query}'")
+        # --- Use the embedder strategy for query ---
+        try:
+            query_embedding = self.embedder.embed([query])
+            query_embedding_np = np.array(query_embedding, dtype=np.float32)
+             # Normalize query vector to match index normalization
+            faiss.normalize_L2(query_embedding_np)
+            logging.info("Query embedding created and normalized.")
+        except Exception as e:
+             logging.error(f"Failed to create query embedding: {e}", exc_info=True)
+             return [], [] # Return empty on error
+        # --- End using embedder ---
         
-        # Perform the search
-        distances, indices = self.index.search(np.array(query_embedding, dtype=np.float32), k)
+        logging.info(f"Searching index for top {top_k} results...")
+        # D: distances (L2 squared), I: indices
+        distances, indices = self.index.search(query_embedding_np, top_k)
         
-        # Process results
-        docs = []
-        doc_scores = []
-        retrieved_ids = []
+        results_docs = []
+        results_scores = []
         
-        if k > 0 and len(indices) > 0:
-            for i, idx in enumerate(indices[0]):
-                if 0 <= idx < len(self.docs):
-                    docs.append(self.docs[idx])
-                    # 将L2距离转换为相似度分数（越小越好 -> 越大越好）
-                    similarity = 1.0 / (1.0 + float(distances[0][i]))
-                    doc_scores.append(similarity)
-                    retrieved_ids.append(self.doc_ids[idx])
+        if indices.size > 0:
+            for i, idx in enumerate(indices[0]): # indices is 2D array [[idx1, idx2, ...]]
+                if idx != -1: # Faiss uses -1 for invalid index
+                    if 0 <= idx < len(self.docs):
+                        results_docs.append(self.docs[idx])
+                        # Convert L2 squared distance to a similarity score (e.g., 1 / (1 + D))
+                        # Or simply return the distance. Let's return distance for now.
+                        results_scores.append(float(distances[0][i]))
+                    else:
+                         logging.warning(f"Retrieved index {idx} is out of bounds for loaded documents (count: {len(self.docs)}). Skipping.")
                 else:
-                    logging.warning(f"Index search returned invalid index: {idx}")
-                
-        logging.info(f"Query '{query[:50]}...' retrieved {len(docs)} documents with IDs: {retrieved_ids}")
-        return docs, doc_scores
+                    logging.debug(f"Index search returned invalid index -1 at position {i}.")
+
+        logging.info(f"Retrieved {len(results_docs)} documents.")
+        return results_docs, results_scores # Return docs and scores
     
     @log_function_call
     def retrieve_with_metadata(self, query, top_k=3):
@@ -297,7 +357,7 @@ class Retriever:
             return []
             
         logging.debug(f"Encoding query for retrieval with metadata: '{query[:100]}...'")
-        query_embedding = self.model.encode([query], normalize_embeddings=True)
+        query_embedding = self.embedder.embed([query])
         k = min(top_k, self.index.ntotal)
         logging.debug(f"Searching index for top {k} documents with metadata.")
         
@@ -320,39 +380,21 @@ class Retriever:
 
     @log_function_call
     def clear_index(self):
-        """Clear the index and associated documents."""
-        logging.info("Clearing FAISS index and document store...")
-        # Recreate the index object
-        self.index = faiss.IndexFlatL2(self.embedding_dim)
-        logging.debug("New empty FAISS index created.")
-        
-        # Move to GPU if applicable
-        if self.on_gpu and hasattr(self, 'gpu_res'):
-            try:
-                self.index = faiss.index_cpu_to_gpu(self.gpu_res, 0, self.index)
-                logging.info("New empty index moved to GPU.")
-            except Exception as e:
-                 logging.error(f"Failed to move new empty index to GPU: {e}")
-                 self.on_gpu = False # Ensure state reflects reality
-            
-        # Clear document lists
-        self.docs = []
-        self.doc_ids = []
-        logging.debug("In-memory document lists cleared.")
-        
-        # Delete index and docs files from disk
-        deleted_files = []
+        """Clears the in-memory index and deletes the files from disk."""
         try:
+            self.index = faiss.IndexFlatL2(self.embedding_dim) # Recreate empty index
+            self.docs = []
+            self.doc_ids = []
+            self._move_index_to_gpu_if_available() # Reset GPU state if applicable
+            logging.info("In-memory index cleared.")
+
             if os.path.exists(self.index_file):
                 os.remove(self.index_file)
                 logging.info(f"Deleted index file: {self.index_file}")
-                deleted_files.append(self.index_file)
             if os.path.exists(self.docs_file):
                 os.remove(self.docs_file)
-                logging.info(f"Deleted document mapping file: {self.docs_file}")
-                deleted_files.append(self.docs_file)
-        except OSError as e:
-            logging.error(f"Error deleting index/docs files: {e}")
-            
-        logging.info(f"Index clear operation complete. Deleted files: {deleted_files}")
-        return True 
+                logging.info(f"Deleted docs mapping file: {self.docs_file}")
+            return True
+        except Exception as e:
+             logging.error(f"Error clearing index: {e}", exc_info=True)
+             return False 

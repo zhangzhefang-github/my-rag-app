@@ -21,13 +21,15 @@ import re # Import re for regex
 # 导入必要的 RAG 组件和配置工具
 from app.rag_pipeline import RAGPipeline
 from app.retriever import Retriever
-from utils.env_helper import load_env_config, get_api_config, get_system_config
+from utils.env_helper import load_env_config, get_system_config
 from utils.logger import setup_logger
 from utils.document_manager import DocumentManager
 from utils.gpu_manager import GPUManager
-from config import APP_PORT # 从 config.py 导入端口号
+# from config import APP_PORT # 移除导入
 # 导入 torch 用于检查 cuda (在 startup 中用到)
 import torch 
+from app.embedding_strategies.config import EmbeddingConfig, HuggingFaceConfig # Add necessary imports
+from app.embedding_strategies.factory import get_embedder # Import factory if needed elsewhere, or just rely on Retriever internal usage
 
 # ---------------------------------------------------------------------------
 # 初始化：加载配置、设置日志、准备 RAG 实例
@@ -125,47 +127,70 @@ async def startup_event():
 
         # 获取配置 (不再处理命令行参数，直接使用环境变量/默认值)
         sys_config = get_system_config()
-        api_config = get_api_config()
 
         # 从配置确定设置
-        use_local_model = sys_config["use_local_model"]
-        low_memory_mode = sys_config["low_memory_mode"]
+        # 移除 low_memory_mode 的访问
+        # low_memory_mode = sys_config["low_memory_mode"]
         # 注意：FastAPI 环境下通常不方便传递 --no-gpu，
         # use_gpu 应主要由环境配置决定，或在部署时考虑。
         # 假设我们总是尝试使用GPU（如果可用且配置允许）。
-        use_gpu = torch.cuda.is_available() # 简化处理，直接看 torch
+        use_gpu = torch.cuda.is_available() and sys_config.get("retriever_use_gpu", True) # Make retriever_use_gpu optional in config
 
-        openai_config = None
-        if not use_local_model:
-            openai_config = api_config
-            logger.info(f"OpenAI config loaded: model={openai_config.get('model')}")
+        # 可以保留一个通用日志，说明LLM配置将动态加载
+        logger.info("LLM configuration will be loaded dynamically based on LLM_PROVIDER.")
+
+        # --- Refactor Retriever Initialization ---
+        # Get embedding model details from system config
+        retriever_model_name = sys_config.get("retriever_model", "moka-ai/m3e-base") # Default HF model
+        local_model_dir = sys_config.get("local_model_dir", "models")
+        index_dir = sys_config.get("index_dir", "data/indexes")
+        docs_dir = sys_config.get("docs_dir", "data/documents")
+
+        # Assume HuggingFace provider based on typical model name format
+        # TODO: Consider adding an explicit 'retriever_provider' to sys_config for clarity
+        embedding_provider = "huggingface" # Default assumption
+
+        logger.info(f"Embedding provider: {embedding_provider}")
+        logger.info(f"Embedding model: {retriever_model_name}")
+        logger.info(f"Retriever GPU usage enabled: {use_gpu}")
+        logger.info(f"Local model directory: {local_model_dir}")
+        logger.info(f"Index directory: {index_dir}")
+        logger.info(f"Docs directory: {docs_dir}")
+
+
+        # Create the specific config based on provider (only HF shown here)
+        # In a real scenario, you might need logic to choose based on provider
+        if embedding_provider == "huggingface":
+            embedding_config_data = {
+                "provider": "huggingface",
+                "model_path": retriever_model_name,
+                "use_gpu": use_gpu,
+                "local_model_dir": local_model_dir
+            }
+        # Add elif blocks here for "openai", "ollama" if needed based on sys_config
+        # elif embedding_provider == "openai":
+        #     embedding_config_data = {...}
+        # elif embedding_provider == "ollama":
+        #     embedding_config_data = {...}
         else:
-            logger.info("OpenAI usage disabled by configuration (USE_LOCAL_MODEL=true).")
+             raise ValueError(f"Unsupported retriever provider specified: {embedding_provider}")
 
-        # 配置检索器
-        retriever_config = {
-            "model_name": sys_config["retriever_model"],
-            "local_model_dir": sys_config["local_model_dir"],
-            "use_gpu": use_gpu,
-            "index_dir": sys_config["index_dir"],
-            "docs_dir": sys_config["docs_dir"]
-        }
-        logger.debug(f"Retriever configuration: {retriever_config}")
-        logger.info(f"Embedding model: {retriever_config['model_name']}")
-        logger.info(f"Retriever GPU usage enabled: {retriever_config['use_gpu']}")
+        # Validate and create the EmbeddingConfig object
+        embedding_config = EmbeddingConfig(config=embedding_config_data)
 
-        # 初始化 Retriever
+        # Initialize Retriever with EmbeddingConfig
         logger.info("Initializing Retriever...")
         retriever = Retriever(
-            model_name=retriever_config['model_name'],
-            use_gpu=retriever_config['use_gpu'],
-            local_model_dir=retriever_config['local_model_dir'],
-            index_dir=retriever_config['index_dir'],
-            docs_dir=retriever_config['docs_dir']
+            embedding_config=embedding_config, # Pass the config object
+            index_dir=index_dir,
+            docs_dir=docs_dir
+            # Removed old arguments: model_name, use_gpu, local_model_dir
         )
         logger.info("Retriever initialized successfully.")
+        # --- End Refactor ---
 
-        # 初始化 RAG Pipeline
+
+        # Initialize RAG Pipeline (remains the same)
         logger.info("Initializing RAGPipeline...")
         rag_pipeline_instance = RAGPipeline(
             retriever=retriever
@@ -174,7 +199,7 @@ async def startup_event():
 
         # 加载文档 (不处理 --reload-index，默认增量加载)
         logger.info("Loading documents into RAG pipeline...")
-        doc_manager = DocumentManager(docs_dir=retriever_config['docs_dir'])
+        doc_manager = DocumentManager(docs_dir=docs_dir)
         documents, doc_ids = doc_manager.load_documents(incremental=True)
         if documents:
             rag_pipeline_instance.add_knowledge(documents, doc_ids)
@@ -554,21 +579,23 @@ async def message_stream_generator(conversation_id: str, query: str, top_k: int 
                 
                 if event_type == "chunk" and isinstance(content, str):
                     token_count += 1
-                    # --- 解析原始块内容 --- 
-                    think_content, answer_chunk = parse_llm_output(content)
-                    # --- 结束解析 --- 
+                    # --- 不再解析原始块内容 --- 
+                    # think_content, answer_chunk = parse_llm_output(content)
+                    # --- 结束移除解析 --- 
 
-                    # Send think block if found and not already sent
-                    if think_content and not sent_think:
-                        full_think = think_content # Store for later? (Optional)
-                        yield f"event: think\ndata: {json.dumps({'content': think_content})}\n\n"
-                        sent_think = True
+                    # --- 移除发送 event: think 的逻辑 --- 
+                    # if think_content and not sent_think:
+                    #     full_think = think_content 
+                    #     yield f"event: think\ndata: {json.dumps({'content': think_content})}\n\n"
+                    #     sent_think = True
+                    # --- 结束移除 event: think --- 
                     
-                    # Send the actual answer chunk
-                    if answer_chunk:
-                        full_answer += answer_chunk
-                        ai_message["content"] = full_answer # Update message with cleaned answer
-                        yield f"data: {json.dumps({'token': answer_chunk})}\n\n"
+                    # --- 直接发送原始 content --- 
+                    if content: # 确保不发送空内容
+                        # 注意：前端现在需要自己处理可能包含 <think> 的 content
+                        full_answer += content # 累加原始 content，但保存到消息记录时可能需要清理
+                        ai_message["content"] = full_answer # 暂时存原始的，后面可能要清理
+                        yield f"data: {json.dumps({'token': content})}\n\n"
                 
                 elif event_type == "sources" and isinstance(content, list):
                      yield f"event: sources\ndata: {json.dumps({'sources': content})}\n\n"
@@ -607,6 +634,17 @@ async def message_stream_generator(conversation_id: str, query: str, top_k: int 
             # 设置消息内容
             ai_message["content"] = full_answer
         
+        # --- 在流结束后，清理可能残留的 <think> 标签再保存到内存 --- 
+        final_clean_answer, _ = parse_llm_output(full_answer)
+        if conversation_id in messages:
+            # Find the specific message and update its content
+            for msg in messages[conversation_id]:
+                 if msg.get("id") == message_id:
+                      msg["content"] = final_clean_answer
+                      logger.debug(f"Saved cleaned final answer to message {message_id}")
+                      break
+        # --- 结束清理 --- 
+
         # 流结束记录
         elapsed = time.time() - start_time
         logger.info(f"流式生成完成: 会话={conversation_id}, 总块数:{token_count}, 总用时{elapsed:.2f}秒")
@@ -701,7 +739,11 @@ app.mount("/assets", StaticFiles(directory="public/assets", html=False), name="a
 
 # 启动代码
 if __name__ == "__main__":
-    logger.info(f"启动Uvicorn服务器: 主机=0.0.0.0, 端口={APP_PORT}")
+    # --- 直接在这里读取 APP_PORT --- 
+    load_dotenv() # 确保 .env 被加载
+    app_port = int(os.getenv("APP_PORT", 8000))
+    # --- 结束读取 --- 
+    logger.info(f"启动Uvicorn服务器: 主机=0.0.0.0, 端口={app_port}")
     # 在startup前记录目录信息
     logger.info(f"当前工作目录: {os.getcwd()}")
     logger.info(f"检查public目录: {'存在' if os.path.exists('public') else '不存在'}")
@@ -710,4 +752,4 @@ if __name__ == "__main__":
     os.makedirs("public/assets", exist_ok=True)
     logger.info("已确保静态文件目录存在")
     # 启动服务器
-    uvicorn.run("api:app", host="0.0.0.0", port=APP_PORT, reload=True)
+    uvicorn.run("api:app", host="0.0.0.0", port=app_port, reload=True)

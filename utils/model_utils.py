@@ -28,6 +28,7 @@ def ensure_dir_exists(directory):
         logging.info(f"创建目录: {directory}")
     return directory
 
+''' # Start comment block
 class ModelManager:
     """
     模型管理器 - 单例模式处理模型加载和缓存
@@ -120,3 +121,4 @@ class ModelManager:
         else:
             self._models.clear()
             logging.info("清除所有模型缓存") 
+''' # End comment block 
