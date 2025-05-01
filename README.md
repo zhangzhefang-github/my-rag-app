@@ -60,6 +60,12 @@ my-rag-app/
 └── LICENSE                      # Project License (MIT)
 ```
 
+### System Flow Diagram
+
+The following diagram illustrates the sequence of operations during a streaming query:
+
+![Streaming Query Sequence Diagram](docs/images/rag_sequence_diagram.png)
+
 ## Installation
 
 1.  **Create Environment and Install Core Libraries:**
@@ -144,6 +150,12 @@ LOG_LEVEL="INFO"                      # Logging level (DEBUG, INFO, WARNING, ERR
 *   **Streaming API:** Supports Server-Sent Events (SSE) for real-time answer generation (if the selected LLM strategy supports streaming).
 *   **GPU Support:** Automatically utilizes GPU for Sentence Transformer embeddings and FAISS indexing (if `faiss-gpu` is installed and GPU is available).
 *   **Simple Web UI:** A basic frontend is included for interaction (served from `/public`).
+
+### Application Interface
+
+Here's a glimpse of the main chat interface:
+
+![Main Chat UI](docs/images/ui_main.png)
 
 ### GPU Acceleration
 
@@ -258,6 +270,12 @@ my-rag-app/
 └── LICENSE                      # 项目许可证 (MIT)
 ```
 
+### 系统流程图
+
+下图展示了处理流式查询时的操作顺序：
+
+![流式查询时序图](docs/images/rag_sequence_diagram.png)
+
 ## 安装
 
 1.  **创建环境并安装核心库:**
@@ -342,6 +360,12 @@ LOG_LEVEL="INFO"                      # 日志级别 (DEBUG, INFO, WARNING, ERRO
 *   **流式 API:** 支持 Server-Sent Events (SSE) 以实现实时答案生成 (如果所选的 LLM 策略支持流式传输)。
 *   **GPU 支持:** 自动利用 GPU 进行 Sentence Transformer 嵌入和 FAISS 索引（如果安装了 `faiss-gpu` 且 GPU 可用）。
 *   **简单 Web UI:** 包含一个基本的前端界面 (`/public`) 用于交互。
+
+### 应用界面
+
+主聊天界面概览：
+
+![主聊天界面](docs/images/ui_main.png)
 
 ### GPU 加速
 

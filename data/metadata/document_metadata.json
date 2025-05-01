@@ -13,11 +13,11 @@
       "hash": "99256b6e9bc75c6ec61a2b8ed8337a6a"
     },
     "source_two.txt": {
-      "size": 380,
-      "mtime": 1745898225.7137775,
+      "size": 378,
+      "mtime": 1746107974.2636282,
       "path": "data/documents/source_two.txt",
-      "hash": "404155965c3c575f90761906c11fa5c4"
+      "hash": "016e2b83be42c71765e2e9f7568bf293"
     }
   },
-  "last_update": 1746072992.5853484
+  "last_update": 1746111625.5612059
 }

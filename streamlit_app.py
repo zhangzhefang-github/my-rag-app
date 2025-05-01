@@ -283,12 +283,25 @@ st.title("💬 智源对话")
 st.caption("采用检索增强生成 (RAG) 架构：基于 FastAPI 构建，集成 Sentence Transformers 与 FAISS 实现高效语义检索，由大语言模型提供支持。")
 
 # --- Display Chat History ---
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-        # 如果消息包含响应时间信息，显示它
-        if "response_time" in message:
-            st.caption(f"响应时长: {message['response_time']}")
+# Make sure current_conversation_id is valid before trying to display
+if st.session_state.current_conversation_id and st.session_state.messages:
+    for message in st.session_state.messages:
+        role = message.get("role", "unknown") # Use .get for safety
+        content = message.get("content", "") # Use .get for safety
+        with st.chat_message(role):
+            if role == "user":
+                st.markdown(content)
+            elif role == "assistant":
+                # Parse the historical assistant message content before displaying
+                _, clean_content = parse_llm_output_frontend(content)
+                st.markdown(clean_content) # Display the cleaned content
+                # Optionally, display saved statistics if available
+                # response_time_info = message.get("response_time", "")
+                # if response_time_info:
+                #     st.caption(f"响应时长: {response_time_info}")
+            else:
+                # Handle potential unknown roles gracefully
+                st.markdown(f"*{role}*: {content}")
 
 # --- Uploader Area (Above Chat Input) ---
 # Button to toggle the file uploader visibility
@@ -595,5 +608,6 @@ if query:
         
     # --- End: Modified Input Handling ---
     
+
 
 
