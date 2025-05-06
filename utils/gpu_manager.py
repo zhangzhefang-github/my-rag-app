@@ -78,6 +78,12 @@ class GPUManager:
         for device in self.gpu_info['devices']:
             print(f"GPU #{device['id']}: {device['name']}, 显存: {device['total_memory_gb']:.2f}GB")
             
+    def get_available_gpu_ids(self) -> list[int]:
+        """Returns a list of available GPU device IDs."""
+        if not self.gpu_available or not self.gpu_info or 'devices' not in self.gpu_info:
+            return []
+        return [device['id'] for device in self.gpu_info['devices']]
+
     def __str__(self):
         if not self.gpu_available:
             return "GPU: 不可用"

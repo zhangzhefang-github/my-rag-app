@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, Request, Depends, BackgroundTasks, Query, Body
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import uvicorn
 import logging
 import os
@@ -11,12 +11,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, HTMLResponse
 from datetime import datetime
-from dotenv import load_dotenv
 from pathlib import Path
 import uuid
-from typing import List, Optional
+from typing import List, Optional, Any, AsyncGenerator, Dict
 import time  # 添加time模块用于计算请求耗时
 import re # Import re for regex
+import numpy as np # Add numpy import
 
 # 导入必要的 RAG 组件和配置工具
 from app.rag_pipeline import RAGPipeline
@@ -29,7 +29,10 @@ from utils.gpu_manager import GPUManager
 # 导入 torch 用于检查 cuda (在 startup 中用到)
 import torch 
 from app.embedding_strategies.config import EmbeddingConfig, HuggingFaceConfig # Add necessary imports
-from app.embedding_strategies.factory import get_embedder # Import factory if needed elsewhere, or just rely on Retriever internal usage
+from app.embedding_strategies.factory import get_embedder # Remove get_embedder_config
+
+# Import the Citation model we defined
+from app.models.document import Citation
 
 # ---------------------------------------------------------------------------
 # 初始化：加载配置、设置日志、准备 RAG 实例
@@ -221,17 +224,30 @@ async def startup_event():
 
 # 查询相关模型
 class QueryRequest(BaseModel):
+    """Request model for the /query endpoint."""
     query: str
-    top_k: int = 3
+    stream: bool = False
+    top_k: Optional[int] = None # Allow overriding retriever's default K
+    # Add other potential parameters like llm_config overrides, etc.
+    # Example: llm_parameters: Optional[Dict[str, Any]] = None 
 
 # --- 修改 QueryResponse 模型 --- 
 class QueryResponse(BaseModel):
-    answer: str
-    think: str | None = None # Add optional think field
-    sources: list[str]
-    success: bool
-    error: str | None = None
-# --- 结束修改 ---
+    """
+    Defines the structured response for the /query endpoint.
+    This is the FINAL structure we aim for after Sprint 2.
+    """
+    query: str = Field(..., description="The original query submitted by the user.")
+    answer_text: str = Field(..., description="The generated answer text from the RAG pipeline.")
+    citations: List[Citation] = Field(default_factory=list, description="List of structured citations supporting the answer.")
+    success: bool = Field(..., description="Indicates if the query processing was successful.")
+    error: Optional[str] = Field(default=None, description="Error message if processing failed.")
+    # You might want to include other metadata, e.g., processing time
+    # processing_time_ms: Optional[float] = Field(default=None, description="Total time taken to process the query in milliseconds.")
+
+    class Config:
+        # Example for Pydantic V2
+        pass
 
 # 会话管理模型
 class Conversation(BaseModel):
@@ -291,73 +307,75 @@ def parse_llm_output(raw_output: str) -> tuple[str | None, str]:
 # --- 非流式端点 (修改) ---
 @app.post("/query", response_model=QueryResponse, summary="非流式查询")
 async def handle_query(request: QueryRequest):
-    """接收用户查询，通过 RAG 系统处理并一次性返回完整答案和来源。"""
+    """Receives a query, processes it through the RAG pipeline, and returns a structured answer.
+    
+    NOTE: For Sprint 1, the actual returned data might temporarily differ internally 
+    and might not perfectly match QueryResponse (especially the 'citations' field) 
+    until Sprint 2 is complete. However, we define the endpoint with the final model.
+    """
     if rag_pipeline_instance is None:
-        logger.error("Query received, but RAG pipeline is not initialized.")
-        raise HTTPException(status_code=503, detail="RAG system is not ready. Initialization failed.")
-
+        logger.error("RAG Pipeline not initialized.")
+        raise HTTPException(status_code=503, detail="Service Unavailable: RAG Pipeline not ready.")
+        
+    # Determine top_k: Use request's value if provided, otherwise use retriever's default
+    top_k_to_use = request.top_k if request.top_k is not None else rag_pipeline_instance.retriever.top_k
+    if top_k_to_use <= 0:
+        raise HTTPException(status_code=400, detail="top_k must be a positive integer.")
+        
+    logger.info(f"Received query: '{request.query}', using top_k={top_k_to_use}")
+    
     try:
-        logger.info(f"Received non-streaming query: '{request.query}' with top_k={request.top_k}")
+        # In Sprint 1, this call will use the *temporarily adjusted* pipeline,
+        # which might return a dict that needs adapting before fitting QueryResponse.
+        # In Sprint 2, this call will return a dict directly matching QueryResponse.
+        result = await rag_pipeline_instance.process_query(query=request.query, top_k=top_k_to_use)
         
-        # --- 修改这里：处理返回的异步生成器 --- 
-        # answer_question now returns a generator even for non-streaming
-        generator = rag_pipeline_instance.answer_question(request.query, top_k=request.top_k)
-        
-        # Get the first (and only) item from the generator
-        result_dict = None
-        try:
-            result_dict = await anext(generator)
-            # Check for subsequent items? Should normally be None or StopAsyncIteration
-        except StopAsyncIteration:
-            logger.error("Non-streaming query generator finished without yielding a result.")
-            raise HTTPException(status_code=500, detail="Failed to get result from generator.")
-        except Exception as gen_e:
-            logger.error(f"Error fetching result from non-streaming generator: {gen_e}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Error processing RAG result.")
-
-        # --- 结束修改 --- 
-
-        # --- 处理生成器返回的字典 --- 
-        if result_dict and result_dict.get("type") == "final_answer":
-            raw_answer = result_dict.get("content", "")
-            # Assuming sources are still needed, how to get them?
-            # Option 1: RAG Pipeline needs to yield sources too.
-            # Option 2: Re-retrieve sources here (inefficient).
-            # Let's assume RAGPipeline.answer_question yields sources separately or includes them.
-            # For now, let's assume sources are NOT in this dict and might be missing.
-            # We need to refactor RAGPipeline.answer_question if sources are needed.
-            # TEMPORARY: We'll use empty sources for now. 
-            # TODO: Refactor RAGPipeline.answer_question to yield sources if needed for non-streaming.
-            sources = [] # Placeholder
-            
-            think_content, answer_content = parse_llm_output(raw_answer)
-            
-            logger.info(f"Successfully processed non-streaming query: '{request.query}'")
-            return QueryResponse(
-                answer=answer_content,
-                think=think_content,   
-                sources=sources, # Using placeholder sources
-                success=True,
-                error=None
-            )
-        elif result_dict and result_dict.get("type") == "error":
-            error_content = result_dict.get("content", "Unknown error during query processing.")
-            logger.error(f"Failed to process non-streaming query: '{request.query}'. Reason: {error_content}")
-            return QueryResponse(
-                answer="",
-                sources=[],
-                think=None,
-                success=False,
-                error=error_content
-            )
+        # --- Adaptation Layer (Remove/Simplify after Sprint 2) --- 
+        # If result in Sprint 1 is {'answer': ..., 'sources': List[Dict]}, adapt it:
+        if "citations" not in result and "sources" in result:
+            logger.warning("API returning temporary structure (Sprint 1). Adapt 'sources' to empty 'citations' for now.")
+            # Create a QueryResponse-like dict, but citations will be wrong/empty
+            response_data = {
+                "query": request.query,
+                "answer_text": result.get("answer", "Error: Answer key missing"),
+                "citations": [], # Cannot populate correctly yet
+                "success": result.get("success", False),
+                "error": result.get("error")
+            }
+            # Validate and return using the target model, even if citations are empty
+            # This ensures the API contract is met structurally.
+            return QueryResponse(**response_data)
+        elif "citations" in result:
+             # Assume result directly matches QueryResponse (Sprint 2 onwards)
+             # Let FastAPI handle validation by returning the dict directly
+             return result
         else:
-            # Handle unexpected result from generator
-            logger.error(f"Unexpected result type from non-streaming generator: {result_dict}")
-            raise HTTPException(status_code=500, detail="Received unexpected result from RAG system.")
-
+            # Handle unexpected result structure
+            logger.error(f"Unexpected result structure from pipeline: {result}")
+            raise HTTPException(status_code=500, detail="Internal Server Error: Unexpected pipeline response.")
+        # --- End Adaptation Layer ---
+        
+    except HTTPException as http_exc:
+         # Re-raise HTTP exceptions directly
+         raise http_exc
     except Exception as e:
-        logger.error(f"Error handling non-streaming query '{request.query}': {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error while processing query.")
+        logger.error(f"Error processing query '{request.query}': {e}", exc_info=True)
+        # Return a structured error response matching QueryResponse
+        error_response = QueryResponse(
+            query=request.query,
+            answer_text="",
+            citations=[],
+            success=False,
+            error=f"An internal error occurred: {str(e)}"
+        )
+        # Return with a 500 status code, but FastAPI expects the model instance
+        # We need to raise HTTPException or return JSONResponse for status code control.
+        # Let's return JSONResponse here to control status and body precisely.
+        return JSONResponse(
+            status_code=500,
+            content=error_response.model_dump(exclude_none=True) # Pydantic v2
+            # content=error_response.dict(exclude_none=True) # Pydantic v1
+        )
 
 # --- SSE 流式端点 (修改 stream_generator 和 message_stream_generator) --- 
 async def stream_generator(query: str, top_k: int):
@@ -392,7 +410,18 @@ async def stream_generator(query: str, top_k: int):
                     yield f"data: {json.dumps({'token': answer_chunk})}\n\n"
             
             elif event_type == "sources" and isinstance(content, list):
-                 yield f"event: sources\ndata: {json.dumps({'sources': content})}\n\n"
+                 # Convert scores to float before JSON serialization
+                 serializable_content = []
+                 for doc in content:
+                     doc_copy = doc.copy() # Work on a copy
+                     # Check for both score types and convert if they are float32
+                     if 'score' in doc_copy and isinstance(doc_copy.get('score'), np.float32):
+                         doc_copy['score'] = float(doc_copy['score'])
+                     if 'rerank_score' in doc_copy and isinstance(doc_copy.get('rerank_score'), np.float32):
+                         doc_copy['rerank_score'] = float(doc_copy['rerank_score'])
+                     serializable_content.append(doc_copy)
+
+                 yield f"event: sources\ndata: {json.dumps({'sources': serializable_content})}\n\n"
             
             elif event_type == "status" and isinstance(content, str):
                  yield f"event: status\ndata: {json.dumps({'status': content})}\n\n"
@@ -418,9 +447,22 @@ async def stream_generator(query: str, top_k: int):
 # 或者，可以直接用 GET: @app.get("/query/stream") async def handle_stream_query(query: str = Query(...), top_k: int = Query(3)):
 @app.post("/query/stream", summary="流式查询 (SSE)")
 async def handle_stream_query(request: QueryRequest):
-    """接收用户查询，通过 RAG 系统处理并通过 SSE 流式返回答案。"""
-    # 返回 StreamingResponse
-    return StreamingResponse(stream_generator(request.query, request.top_k), media_type="text/event-stream")
+    """Receives a query and streams the RAG pipeline results back using SSE."""
+    if rag_pipeline_instance is None:
+        logger.error("RAG Pipeline not initialized for streaming.")
+        raise HTTPException(status_code=503, detail="Service Unavailable: RAG Pipeline not ready.")
+        
+    top_k_to_use = request.top_k if request.top_k is not None else rag_pipeline_instance.retriever.top_k
+    if top_k_to_use <= 0:
+         raise HTTPException(status_code=400, detail="top_k must be a positive integer.")
+         
+    logger.info(f"Received streaming query: '{request.query}', using top_k={top_k_to_use}")
+    
+    # Return a StreamingResponse that uses the async generator
+    return StreamingResponse(
+        stream_generator(request.query, top_k_to_use),
+        media_type="text/event-stream"
+    )
 
 # --- 会话管理接口 ---
 @app.get("/conversations", response_model=ConversationList)
@@ -574,50 +616,65 @@ async def message_stream_generator(conversation_id: str, query: str, top_k: int 
             token_count = 0
             
             async for chunk_dict in stream:
-                event_type = chunk_dict.get("type")
-                content = chunk_dict.get("content")
-                
-                if event_type == "chunk" and isinstance(content, str):
-                    token_count += 1
-                    # --- 不再解析原始块内容 --- 
-                    # think_content, answer_chunk = parse_llm_output(content)
-                    # --- 结束移除解析 --- 
-
-                    # --- 移除发送 event: think 的逻辑 --- 
-                    # if think_content and not sent_think:
-                    #     full_think = think_content 
-                    #     yield f"event: think\ndata: {json.dumps({'content': think_content})}\n\n"
-                    #     sent_think = True
-                    # --- 结束移除 event: think --- 
+                # Validate chunk_dict is a dictionary
+                if not isinstance(chunk_dict, dict):
+                    logger.warning(f"Received non-dict item from RAG stream: {chunk_dict}")
+                    continue 
                     
-                    # --- 直接发送原始 content --- 
-                    if content: # 确保不发送空内容
-                        # 注意：前端现在需要自己处理可能包含 <think> 的 content
-                        full_answer += content # 累加原始 content，但保存到消息记录时可能需要清理
-                        ai_message["content"] = full_answer # 暂时存原始的，后面可能要清理
-                        yield f"data: {json.dumps({'token': content})}\n\n"
+                event_type = chunk_dict.get("type")
+                data_content = chunk_dict.get("data") # Renamed from 'content' to avoid confusion
                 
-                elif event_type == "sources" and isinstance(content, list):
-                     yield f"event: sources\ndata: {json.dumps({'sources': content})}\n\n"
+                # --- Handle different event types --- 
+                if event_type == "chunk" and isinstance(data_content, str):
+                    token_count += 1
+                    full_answer += data_content # Accumulate the answer
+                    # Send token chunk to client
+                    yield f"data: {json.dumps({'token': data_content})}\n\n"
+                    
+                # --- SPRINT 2: Remove handling for old 'sources' event ---
+                # elif event_type == "sources" and isinstance(data_content, list):
+                #      yield f"event: sources\ndata: {json.dumps({'sources': data_content})}\n\n"
+                #      ai_message['sources'] = data_content 
                 
-                elif event_type == "status" and isinstance(content, str):
-                     yield f"event: status\ndata: {json.dumps({'status': content})}\n\n"
-                     
-                elif event_type == "error" and isinstance(content, str):
-                    error_payload = {"token": f"\n\nError: {content}"}
-                    yield f"data: {json.dumps(error_payload)}\n\n" # Send as regular data
-                    yield f"event: error\ndata: {json.dumps({'detail': content})}\n\n"
-                    if not full_answer:
-                        full_answer = f"Error: {content}"
-                    ai_message["content"] = full_answer
-                
-                else:
-                     logger.warning(f"Unknown or malformed chunk in message_stream_generator: {chunk_dict}")
+                # --- SPRINT 2: Add handling for new 'citations' event ---
+                elif event_type == "citations" and isinstance(data_content, list):
+                     logger.debug(f"Received {len(data_content)} citations from RAG pipeline.")
+                     # Assume data_content is already a list of serialized Citation dicts
+                     yield f"event: citations\ndata: {json.dumps({'citations': data_content})}\n\n"
+                     # Store citations in the message object for history
+                     ai_message['citations'] = data_content 
 
-                await asyncio.sleep(0.01)
+                elif event_type == "error" and isinstance(data_content, str):
+                    logger.error(f"Error received from RAG pipeline: {data_content}")
+                    # Send error event to client
+                    yield f"event: error\ndata: {json.dumps({'detail': data_content})}\n\n"
+                    # Optionally append error to the displayed answer
+                    if not full_answer.endswith("[ERROR]"):
+                         full_answer += f"\n\n[ERROR: {data_content}]" 
+                         # Send error as a data token as well? Maybe not needed if event is sent.
+                         # yield f"data: {json.dumps({'token': f'\n\n[ERROR: {data_content}]'})}\n\n"
+
+                elif event_type == "debug" and isinstance(data_content, dict):
+                    logger.debug(f"Debug info received from RAG pipeline: {data_content}")
+                    # Send debug event (client might ignore it)
+                    yield f"event: debug\ndata: {json.dumps(data_content)}\n\n"
+                    
+                elif event_type == "final_answer" and isinstance(data_content, str):
+                    # This might be yielded if RAG has no context
+                    full_answer = data_content # Overwrite if this is the final intended answer
+                    yield f"data: {json.dumps({'token': data_content})}\n\n"
+                     
+                # Remove the old else block that printed warnings for known types now
+                # else:
+                #      logger.warning(f"Unknown or malformed chunk in message_stream_generator: {chunk_dict}")
+
+                # Update the in-memory message content as we go
+                ai_message["content"] = full_answer 
+
+                await asyncio.sleep(0.01) # Small sleep to prevent tight loop
                 
         except Exception as e:
-            # 捕获流式生成过程中的错误
+            # Catch errors during the streaming process itself (outside RAG pipeline)
             error_message = f"处理您的查询时出现错误: {str(e)}"
             logger.error(f"流式生成过程出错: {e}", exc_info=True)
             

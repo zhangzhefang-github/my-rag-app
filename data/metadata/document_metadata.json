@@ -6,18 +6,36 @@
       "path": "data/documents/source.txt",
       "hash": "3090cd74c860f4e2e3c337b4b336a682"
     },
+    "ai_dartmouth_details.txt": {
+      "size": 450,
+      "mtime": 1746287276.5084338,
+      "path": "data/documents/ai_dartmouth_details.txt",
+      "hash": "aedadce30d4fe3cf768d08edc19b1edf"
+    },
     "test_document.txt": {
       "size": 1620,
       "mtime": 1745818018.6174662,
       "path": "data/documents/test_document.txt",
       "hash": "99256b6e9bc75c6ec61a2b8ed8337a6a"
     },
+    "ai_ethics_challenges.txt": {
+      "size": 432,
+      "mtime": 1746287280.8684323,
+      "path": "data/documents/ai_ethics_challenges.txt",
+      "hash": "c09f6570bc5e95e3bbc5bb6f7a10ed0a"
+    },
     "source_two.txt": {
       "size": 378,
-      "mtime": 1746107974.2636282,
+      "mtime": 1746287304.778424,
       "path": "data/documents/source_two.txt",
       "hash": "016e2b83be42c71765e2e9f7568bf293"
+    },
+    "general_teacher_role.txt": {
+      "size": 400,
+      "mtime": 1746287288.7784295,
+      "path": "data/documents/general_teacher_role.txt",
+      "hash": "36a49f56504054a57800686c1911b5cb"
     }
   },
-  "last_update": 1746111625.5612059
+  "last_update": 1746523468.1504378
 }

@@ -8,11 +8,18 @@ from utils.env_helper import load_env_config # Reuse env loading
 import aiohttp
 import logging
 import re # <<< Add import re
+from dotenv import load_dotenv
+from typing import Dict, Any, List
 
-# --- Logger Setup ---
-# Configure logging (optional, basic config shown)
-# logging.basicConfig(level=logging.INFO) # You can adjust level
-logger = logging.getLogger(__name__) # <<< Get logger instance
+# --- Basic Logging Configuration ---
+log_level_str = os.environ.get("FRONTEND_LOG_LEVEL", "INFO").upper()
+log_level = getattr(logging, log_level_str, logging.INFO)
+logging.basicConfig(level=log_level, 
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                    handlers=[logging.StreamHandler()]) # Log to console
+logger = logging.getLogger("StreamlitApp")
+logger.info("Streamlit application starting/reloading...")
+# ---------------------------------
 
 # --- Configuration ---
 # 使用 session_state 确保环境变量只加载一次
@@ -22,154 +29,271 @@ if 'env_loaded' not in st.session_state or not st.session_state.env_loaded:
     # 可以在这里加一个日志，只打印一次
     logger.info("已加载环境变量 (首次加载)。") 
 
-API_HOST = os.environ.get("API_HOST", "localhost") # Allow overriding host
-# --- 读取 APP_PORT --- 
-# Get port directly from environment or use default
-API_PORT = int(os.getenv("APP_PORT", 8000))
-# --- 结束读取 --- 
+# Load environment variables
+load_dotenv()
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000") # Default for local dev
 
-API_STREAM_URL = f"http://{API_HOST}:{API_PORT}/query/stream"
-API_QUERY_URL = f"http://{API_HOST}:{API_PORT}/query" # For fetching sources later if needed
-API_CONVERSATIONS_URL = f"http://{API_HOST}:{API_PORT}/conversations"
+# Setup logging
+logging.basicConfig(level=logging.INFO)
 
-# --- Frontend Parser Function (copied from api.py) ---
-def parse_llm_output_frontend(raw_output: str) -> tuple[str | None, str]:
-    """Parses raw LLM output, extracting <think> block and main answer.
-    
-    Args:
-        raw_output: The raw string output from the LLM (potentially a chunk).
+# --- Helper Functions --- #
+def get_api_url(endpoint: str) -> str:
+    """Constructs the full API URL."""
+    return f"{API_BASE_URL.rstrip('/')}/{endpoint.lstrip('/')}"
+
+def check_api_health() -> bool:
+    """Checks if the backend API is available."""
+    health_url = get_api_url("health")
+    logger.info(f"Attempting health check for backend API at: {health_url}")
+    try:
+        response = requests.get(health_url, timeout=3)
+        is_healthy = response.status_code == 200 and response.json().get("status") == "ok"
+        if is_healthy:
+            logger.info(f"API health check successful for {health_url}.")
+        else:
+            logger.warning(f"API health check for {health_url} failed with status {response.status_code}. Response: {response.text[:200]}")
+        return is_healthy
+    except requests.exceptions.RequestException as e:
+        logger.error(f"API health check failed for {health_url}. Error: {e}", exc_info=True)
+        return False
+
+# Function to create a new conversation via API
+def create_conversation(title: str) -> Dict[str, Any] | None:
+    """Calls the backend API to create a new conversation."""
+    create_url = get_api_url('/conversations')
+    payload = {"title": title}
+    logger.info(f"Attempting to create conversation with title: '{title}' at {create_url}")
+    try:
+        response = requests.post(create_url, json=payload, timeout=10)
+        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+        new_conv_data = response.json()
+        logger.info(f"Successfully created conversation: {new_conv_data.get('id')}")
+        return new_conv_data
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to create conversation at {create_url}. Error: {e}", exc_info=True)
+        st.error(f"创建新对话失败: {e}") # Show error to user
+        return None
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse create conversation response from {create_url}. Status: {response.status_code}, Response: {response.text[:200]}. Error: {e}")
+        st.error("创建新对话时收到无效的响应。")
+        return None
+
+# Function to get the list of conversations via API
+def get_conversations() -> List[Dict[str, Any]]:
+    """Calls the backend API to get the list of conversations."""
+    list_url = get_api_url('/conversations')
+    logger.info(f"Attempting to fetch conversation list from {list_url}")
+    try:
+        response = requests.get(list_url, timeout=10)
+        response.raise_for_status() # Raise HTTPError for bad responses
+        response_data = response.json()
+        # Extract the list from the 'conversations' key
+        conversations = response_data.get('conversations', []) 
         
-    Returns:
-        A tuple containing: (think_content, answer_content)
-        think_content is None if no <think> block is found.
-        answer_content is the part of the raw_output outside the think block.
-    """
+        # Ensure it's actually a list after extraction
+        if isinstance(conversations, list):
+             logger.info(f"Successfully fetched {len(conversations)} conversations.")
+             return conversations
+        else:
+             logger.error(f"Extracted 'conversations' key did not contain a list. Type: {type(conversations)}, Response Data: {str(response_data)[:200]}")
+             st.error("获取对话列表时收到无效的数据结构。")
+             return []
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to fetch conversations from {list_url}. Error: {e}", exc_info=True)
+        # Avoid showing error directly here as it might be called frequently
+        # st.error(f"获取对话列表失败: {e}")
+        return []
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse conversation list response from {list_url}. Status: {response.status_code}, Response: {response.text[:200]}. Error: {e}")
+        # st.error("获取对话列表时收到无效的响应。")
+        return []
+
+# Function to parse LLM output on the frontend (similar to backend)
+def parse_llm_output_frontend(raw_output: str) -> tuple[str | None, str]:
+    """Parses raw LLM output string, extracting <think> block and main answer."""
     think_content = None
-    answer_content = raw_output # Default to the full output
-    
-    # Use regex to find and extract <think> block (non-greedy)
+    answer_content = raw_output
+
     match = re.search(r"<think>(.*?)</think>", raw_output, flags=re.DOTALL)
     if match:
-        think_content = match.group(1).strip() # Get content inside tags
-        # Remove the think block and surrounding whitespace from the answer
+        think_content = match.group(1).strip()
         answer_content = re.sub(r"<think>.*?</think>", "", raw_output, flags=re.DOTALL).strip()
-        # Optional: remove leading newline if present after removal
         answer_content = re.sub(r"^\s*\n", "", answer_content) 
-        
+
     return think_content, answer_content
-# --- End Parser Function ---
 
-# --- API Client Functions ---
-def get_backend_error_message(response: requests.Response) -> str:
-    """Extracts error message from backend response."""
-    try:
-        detail = response.json().get("detail", "Unknown error")
-        return f"Backend Error ({response.status_code}): {detail}"
-    except json.JSONDecodeError:
-        return f"Backend Error ({response.status_code}): {response.text}"
-
-def get_conversations():
-    """Fetch the list of conversations from the backend."""
-    try:
-        response = requests.get(API_CONVERSATIONS_URL, timeout=10)
-        response.raise_for_status()
-        return response.json().get("conversations", [])
-    except requests.exceptions.RequestException as e:
-        st.error(f"Error fetching conversations: {e}")
-        return []
-    except Exception as e:
-        st.error(f"An unexpected error occurred while fetching conversations: {e}")
-        return []
-
-def create_conversation(title: str = "New Conversation"):
-    """Create a new conversation on the backend."""
-    try:
-        payload = {"title": title}
-        response = requests.post(API_CONVERSATIONS_URL, json=payload, timeout=10)
-        response.raise_for_status()
-        return response.json() # Returns the created conversation object
-    except requests.exceptions.RequestException as e:
-        st.error(f"Error creating conversation: {e}")
-        return None
-    except Exception as e:
-        st.error(f"An unexpected error occurred while creating conversation: {e}")
-        return None
-
-def get_messages(conversation_id: str):
-    """Fetch messages for a specific conversation."""
-    try:
-        url = f"{API_CONVERSATIONS_URL}/{conversation_id}/messages"
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        return response.json().get("messages", [])
-    except requests.exceptions.RequestException as e:
-        st.error(f"Error fetching messages for conversation {conversation_id}: {e}")
-        return []
-    except Exception as e:
-        st.error(f"An unexpected error occurred while fetching messages: {e}")
-        return []
-
-def delete_conversation(conversation_id: str):
-    """Delete a conversation on the backend."""
-    try:
-        url = f"{API_CONVERSATIONS_URL}/{conversation_id}"
-        response = requests.delete(url, timeout=10)
-        response.raise_for_status() # Raises HTTPError for bad responses (4xx or 5xx)
-        # Check if the response indicates success (usually 200 OK or 204 No Content)
-        # Some APIs return a body on DELETE, some don't. Status code is reliable.
-        logger.info(f"对话 {conversation_id} 删除成功，状态码: {response.status_code}")
-        return True
-    except requests.exceptions.RequestException as e:
-        error_msg = get_backend_error_message(e.response) if e.response else str(e)
-        st.error(f"删除对话 {conversation_id} 失败: {error_msg}")
-        logger.error(f"删除对话 {conversation_id} 时出错: {error_msg}")
-        return False
-    except Exception as e:
-        st.error(f"删除对话 {conversation_id} 时发生意外错误: {e}")
-        logger.error(f"删除对话 {conversation_id} 时发生意外错误: {e}")
-        return False
-
-# Note: Sending message needs careful adaptation of the streaming logic later
-# Placeholder for now
-def send_message_in_conversation(conversation_id: str, message_content: str):
-    """Sends a message within a specific conversation and handles the stream."""
-    # This function will replace the direct call to API_STREAM_URL
-    # It needs to call POST /conversations/{conversation_id}/messages
-    # and handle the streaming response similar to how it was done before.
-    # We will implement this in the next step.
-    pass
-
-# --- Streamlit Page Setup ---
+# --- Streamlit App UI --- #
 st.set_page_config(
     page_title="智源对话",
     layout="wide",
-    initial_sidebar_state="auto" 
+    initial_sidebar_state="auto"
 )
 
-# --- Custom CSS Injection for Selected Conversation ---
-# Remove the st.markdown CSS injection below
-# st.markdown('''...''', unsafe_allow_html=True)
+st.title("💬 智源对话")
+st.caption("采用检索增强生成 (RAG) 架构：基于 FastAPI 构建，集成 Sentence Transformers 与 FAISS 实现高效语义检索，由大语言模型提供支持。")
 
-# --- Session State Initialization (Moved Up) ---
-# Initialize state variables early, before accessing them in UI elements.
-if "messages" not in st.session_state:
-    st.session_state.messages = [] 
-if "current_conversation_id" not in st.session_state:
-    st.session_state.current_conversation_id = None 
-if "conversation_list" not in st.session_state:
-    # Fetch initial list only once here
-    st.session_state.conversation_list = get_conversations() 
-if "pending_delete_id" not in st.session_state:
+# Check API status
+api_available = check_api_health()
+if not api_available:
+    st.error("🚨 Backend API is not reachable. Please ensure the FastAPI server is running.")
+    st.stop()
+else:
+    st.success("✅ Backend API is connected.")
+
+# Initialize session state for conversation history if it doesn't exist
+if 'messages' not in st.session_state:
+    st.session_state.messages = []
+if 'current_sources' not in st.session_state:
+    st.session_state.current_sources = None # Store sources for the last response
+# Add initialization for conversation_list
+if 'conversation_list' not in st.session_state:
+    st.session_state.conversation_list = []
+# Add initialization for current_conversation_id
+if 'current_conversation_id' not in st.session_state:
+    st.session_state.current_conversation_id = None
+# Add initialization for pending_delete_id
+if 'pending_delete_id' not in st.session_state:
     st.session_state.pending_delete_id = None
-if "show_uploader" not in st.session_state: # <<< Initialize show_uploader state
-    st.session_state.show_uploader = False
-if "think_displayed" not in st.session_state: # <<< Add flag for think block
-    st.session_state.think_displayed = False
-# <<< Add state for parsing think block >>>
-if "parsing_think_block" not in st.session_state:
-    st.session_state.parsing_think_block = False
-if "current_think_content" not in st.session_state:
-    st.session_state.current_think_content = ""
+# Add initialization for current_citations (Sprint 2)
+if 'current_citations' not in st.session_state:
+    st.session_state.current_citations = []
+
+# Display chat messages from history
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        if message["role"] == "user":
+            st.markdown(message["content"])
+        elif message["role"] == "assistant":
+            # Use the frontend parser to clean potential <think> tags
+            _, answer_content = parse_llm_output_frontend(message["content"])
+            st.markdown(answer_content)
+            
+            # --- SPRINT 2: Display Citations for historical messages --- 
+            if "citations" in message and message["citations"]:
+                with st.expander("查看引用", expanded=False):
+                    for i, citation in enumerate(message["citations"]):
+                        st.markdown(f"**[{i+1}] 引用自:** {citation.get('doc_source_name', '未知来源')}")
+                        st.markdown(f"> {citation.get('text_quote', '...')}")
+                        # Optionally add a way to see the full chunk_text
+                        with st.popover("查看完整来源块", use_container_width=True):
+                            st.markdown(f"##### 来源: {citation.get('doc_source_name', 'N/A')} (块 ID: {citation.get('chunk_id', 'N/A')})")
+                            st.markdown(f"```\n{citation.get('chunk_text', '无内容')}\n```")
+                        st.markdown("---")
+            # --- End Sprint 2 Citation Display ---
+            
+            # --- SPRINT 1: Remove old source display --- 
+            # if "sources" in message and message["sources"]:
+            #      with st.expander("查看来源 (原始数据)"):
+            #          st.json(message["sources"])
+            # --- End Sprint 1 Removal ---
+
+# Get user input
+# user_query = st.chat_input("向 智源对话 提问...") # <-- REMOVE THIS
+
+# if user_query: # <-- REMOVE THIS BLOCK
+    # logger.info(f"User query: '{user_query}'")
+    # # Add user message to chat history and display it
+    # st.session_state.messages.append({"role": "user", "content": user_query})
+    # with st.chat_message("user"):
+    #     st.markdown(user_query)
+    #
+    # # Prepare API request data
+    # request_data = {
+    #     "query": user_query,
+    #     "stream": True,
+    #     "top_k": None
+    # }
+    #
+    # # Display assistant response placeholder
+    # with st.chat_message("assistant"):
+    #     message_placeholder = st.empty()
+    #     full_response = ""
+    #     st.session_state.current_sources = None # Reset sources for the new query
+    #     sources_container = st.expander("查看来源 (原始数据)", expanded=False) # Pre-create expander
+    #     sources_placeholder = sources_container.empty() # Placeholder within expander
+    #
+    #     try:
+    #         if True:
+    #             logger.debug(f"Sending streaming request to {get_api_url('/query')}")
+    #             stream_response = requests.post(get_api_url('/query'), json=request_data, stream=True)
+    #             stream_response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+    #
+    #             # Process Server-Sent Events (SSE)
+    #             for line in stream_response.iter_lines(decode_unicode=True):
+    #                 if line.startswith("data:"):
+    #                     try:
+    #                         message_data = json.loads(line[len("data:"):])
+    #                         message_type = message_data.get("type")
+    #                         data_content = message_data.get("data")
+    #
+    #                         #logger.debug(f"Received stream data: type='{message_type}', data='{str(data_content)[:100]}...'")
+    #
+    #                         if message_type == "chunk": # Assuming LLM token chunks
+    #                             full_response += data_content
+    #                             message_placeholder.markdown(full_response + "▌")
+    #                         elif message_type == "final_answer": # Handle case where pipeline sends a single final answer
+    #                             full_response = data_content
+    #                             message_placeholder.markdown(full_response)
+    #                         elif message_type == "sources":
+    #                             # **SPRINT 1**: Store the raw sources list
+    #                             st.session_state.current_sources = data_content
+    #                             sources_placeholder.json(st.session_state.current_sources)
+    #                             logger.info(f"Received sources data (count: {len(data_content) if isinstance(data_content, list) else 'N/A'})")
+    #                         elif message_type == "error":
+    #                             full_response += f"\n\n**Error:** {data_content}"
+    #                             message_placeholder.error(full_response)
+    #                             logger.error(f"Stream reported error: {data_content}")
+    #                         elif message_type == "debug":
+    #                             logger.debug(f"Debug info from stream: {data_content}")
+    #                             # Optionally display debug info in a separate area
+    #                         # Add handling for other types like 'status' if needed
+    #
+    #                     except json.JSONDecodeError:
+    #                         logger.warning(f"Received non-JSON data line: {line}")
+    #                     except Exception as stream_parse_e:
+    #                          logger.error(f"Error parsing stream message '{line}': {stream_parse_e}", exc_info=True)
+    #                          full_response += "\n\n*(Error parsing stream data)*"
+    #                          message_placeholder.warning(full_response)
+    #
+    #             message_placeholder.markdown(full_response) # Final update without cursor
+    #             logger.info("Streaming response processing complete.")
+    #
+    #         else: # Non-streaming request
+    #             logger.debug(f"Sending non-streaming request to {get_api_url('/query')}")
+    #             response = requests.post(get_api_url('/query'), json=request_data)
+    #             response.raise_for_status()
+    #             result = response.json()
+    #
+    #             # **SPRINT 1**: Expecting {"answer": ..., "sources": [raw_chunks...]}
+    #             full_response = result.get("answer", "*No answer received*")
+    #             st.session_state.current_sources = result.get("sources", []) # Get raw sources
+    #             debug_info = result.get("debug_info")
+    #
+    #             message_placeholder.markdown(full_response)
+    #             if st.session_state.current_sources:
+    #                 sources_placeholder.json(st.session_state.current_sources)
+    #             if debug_info:
+    #                  logger.info(f"Non-streaming debug info: {debug_info}")
+    #                  # st.sidebar.json(debug_info) # Optionally display debug info
+    #             logger.info("Non-streaming response received and processed.")
+    #
+    #     except requests.exceptions.RequestException as e:
+    #         logger.error(f"API request failed: {e}", exc_info=True)
+    #         message_placeholder.error(f"Error communicating with backend: {e}")
+    #     except Exception as e:
+    #          logger.error(f"An unexpected error occurred in Streamlit app: {e}", exc_info=True)
+    #          message_placeholder.error(f"An unexpected error occurred: {e}")
+    #
+    # # Add assistant response (and sources) to chat history
+    # assistant_message = {
+    #     "role": "assistant",
+    #     "content": full_response,
+    #     "sources": st.session_state.current_sources # Add sources here
+    # }
+    # st.session_state.messages.append(assistant_message)
+
+# Optional: Clear history button
+st.sidebar.button("Clear Chat History", on_click=lambda: st.session_state.update(messages=[], current_sources=None))
 
 # --- Sidebar --- 
 st.sidebar.title("导航与设置")
@@ -273,35 +397,30 @@ st.sidebar.markdown("--- ") # Separator before settings
 #    ...
 
 st.sidebar.caption("当前设置：")
-st.sidebar.write(f"- API Host: {API_HOST}")
-st.sidebar.write(f"- API Port: {API_PORT}")
-# 未来可以在这里添加更多设置，例如 top_k 滑块
-# top_k_slider = st.sidebar.slider("检索文档数 (top_k)", 1, 10, 3)
+st.sidebar.write(f"- API Host: {API_BASE_URL}")
 
 # --- Main Page --- 
-st.title("💬 智源对话")
-st.caption("采用检索增强生成 (RAG) 架构：基于 FastAPI 构建，集成 Sentence Transformers 与 FAISS 实现高效语义检索，由大语言模型提供支持。")
-
-# --- Display Chat History ---
-# Make sure current_conversation_id is valid before trying to display
-if st.session_state.current_conversation_id and st.session_state.messages:
-    for message in st.session_state.messages:
-        role = message.get("role", "unknown") # Use .get for safety
-        content = message.get("content", "") # Use .get for safety
-        with st.chat_message(role):
-            if role == "user":
-                st.markdown(content)
-            elif role == "assistant":
-                # Parse the historical assistant message content before displaying
-                _, clean_content = parse_llm_output_frontend(content)
-                st.markdown(clean_content) # Display the cleaned content
-                # Optionally, display saved statistics if available
-                # response_time_info = message.get("response_time", "")
-                # if response_time_info:
-                #     st.caption(f"响应时长: {response_time_info}")
-            else:
-                # Handle potential unknown roles gracefully
-                st.markdown(f"*{role}*: {content}")
+# REMOVED: Duplicate chat history rendering loop
+# # --- Display Chat History ---
+# # Make sure current_conversation_id is valid before trying to display
+# if st.session_state.current_conversation_id and st.session_state.messages:
+#     for message in st.session_state.messages:
+#         role = message.get("role", "unknown") # Use .get for safety
+#         content = message.get("content", "") # Use .get for safety
+#         with st.chat_message(role):
+#             if role == "user":
+#                 st.markdown(content)
+#             elif role == "assistant":
+#                 # Parse the historical assistant message content before displaying
+#                 think_content, answer_content = parse_llm_output_frontend(content)
+#                 st.markdown(answer_content) # Display the cleaned content
+#                 # Optionally, display saved statistics if available
+#                 # response_time_info = message.get("response_time", "")
+#                 # if response_time_info:
+#                 #     st.caption(f"响应时长: {response_time_info}")
+#             else:
+#                 # Handle potential unknown roles gracefully
+#                 st.markdown(f"*{role}*: {content}")
 
 # --- Uploader Area (Above Chat Input) ---
 # Button to toggle the file uploader visibility
@@ -330,7 +449,7 @@ if st.session_state.get("show_uploader", False):
             
             if st.button("处理上传的文件", key="process_upload_main", use_container_width=True):
                 # --- Upload Logic (remains the same) --- 
-                upload_url = f"http://{API_HOST}:{API_PORT}/upload-documents" 
+                upload_url = f"http://{API_BASE_URL.split('//')[1]}/upload-documents" 
                 files_to_upload = []
                 for file in uploaded_files:
                     files_to_upload.append(("files", (file.name, file, file.type)))
@@ -412,148 +531,153 @@ if query:
             st.error("无法创建新对话，请检查后端连接。")
             st.stop() # Stop processing if conversation creation fails
             
-    # 2. Add user message to chat history (both session state and UI)
-    user_message = {"role": "user", "content": query} # Backend format might differ slightly
+    # 2. Add user message to session state AND RENDER IT IMMEDIATELY
+    user_message = {"role": "user", "content": query}
     st.session_state.messages.append(user_message)
+    # Render the user message immediately after adding it to state
     with st.chat_message("user"):
         st.markdown(query)
 
     # 3. Send message and handle streaming response
-    with st.chat_message("assistant"):
-        status = st.status("Assistant is thinking...", expanded=False)
-        answer_placeholder = st.empty()
-        time_info = st.empty()
-        full_answer = ""
-        # Reset states for the new response stream
-        st.session_state.think_displayed = False 
-        st.session_state.parsing_think_block = False 
-        st.session_state.current_think_content = "" 
-        error_occurred = False
-        start_time = time.time()
-        first_token_time = None
-        token_count = 0
-        start_datetime = datetime.now().strftime("%H:%M:%S")
+    # Setup placeholders BEFORE the try block
+    # Use columns to place status and time_info potentially to the right or below
+    status_placeholder = st.empty()
+    answer_placeholder = st.empty()
+    citations_placeholder = st.empty() 
+    time_info_placeholder = st.empty()
 
-        try:
-            status.update(label=f"向对话 {current_cid[:8]} 发送消息...", state="running")
+    # Initialize response variables
+    full_answer = ""
+    st.session_state.current_citations = [] # Reset citations for new response
+    error_occurred = False
+    start_time = time.time()
+    first_token_time = None
+    token_count = 0
+    start_datetime = datetime.now().strftime("%H:%M:%S")
+
+    # REMOVED: Explicit rendering of assistant message container here
+    # with st.chat_message("assistant"):
+    # Status and placeholders are handled outside this removed block now
+
+    try:
+        with status_placeholder.status("Assistant is thinking...", expanded=False) as status:
+            logger.info(f"向对话 {current_cid[:8]} 发送消息...")
             
             message_payload = {
                 "conversation_id": current_cid,
                 "content": query, 
                 "role": "user"
             } 
-            message_stream_url = f"{API_CONVERSATIONS_URL}/{current_cid}/messages"
+            message_stream_url = get_api_url(f'/conversations/{current_cid}/messages') 
             headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
             
             with requests.post(message_stream_url, json=message_payload, headers=headers, stream=True, timeout=180) as response:
                 response.raise_for_status()
                 status.update(label="接收回复...", state="running")
                 
+                # --- Stream processing loop starts here --- 
+                current_event_type = None # Track the event type
                 for line in response.iter_lines(decode_unicode=True):
                     current_time = time.time()
                     elapsed = current_time - start_time
-                    
-                    if line.startswith("event: error"):
-                        try:
-                            error_data_str = line.split("data: ", 1)[1] # Get data part after "data: "
-                            error_data = json.loads(error_data_str)
-                            detail = error_data.get('detail', '未知流错误')
-                            # Display error in the answer placeholder temporarily
-                            answer_placeholder.error(f"流处理错误: {detail}")
-                            logger.error(f"SSE Error Event: {detail}")
-                        except (IndexError, json.JSONDecodeError) as e:
-                             error_msg = f"流处理错误，无法解析: {line}"
-                             answer_placeholder.error(error_msg)
-                             logger.error(error_msg + f" | Exception: {e}")
-                        error_occurred = True
-                        status.update(label="流处理出错", state="error", expanded=True)
-                        # Don't break here yet, wait for potential 'end' event or stream close
+
+                    # Process SSE lines (event:, data:, or empty lines)
+                    if line.startswith('event:'):
+                        current_event_type = line.split('event:', 1)[1].strip()
+                        # logger.debug(f"SSE Event Type: {current_event_type}")
+                        continue # Move to next line (should be data:)
+                    elif line.startswith('data:'):
+                        data_str = line.split('data:', 1)[1].strip()
+                        if not data_str: # Skip empty data lines
+                             continue
                         
-                    elif line.startswith("event: end"):
-                        logger.info(f"SSE End Event received: {line}")
-                        status.update(label="流处理完成.", state="complete", expanded=False)
-                        break # Simply break the loop on end event
-
-                    elif line.startswith("data:"):
+                        # Process data based on the tracked event type or default ('message' or 'chunk')
+                        event_to_process = current_event_type if current_event_type else 'chunk' # Default to chunk if no event specified
+                        
                         try:
-                            data_str = line.split("data: ", 1)[1]
-                            data = json.loads(data_str)
-                            raw_token = data.get("token", "") 
+                            data = json.loads(data_str) # Assume data is always JSON
                             
-                            if raw_token:
-                                token_count += 1 
-                                if first_token_time is None:
-                                    first_token_time = current_time
+                            if event_to_process == 'citations':
+                                extracted_citations = None
+                                # Try extracting from {"data": [...]} structure first
+                                if isinstance(data, dict):
+                                     potential_list = data.get('data')
+                                     if isinstance(potential_list, list):
+                                         extracted_citations = potential_list
+                                         logger.debug("Extracted citations using 'data' key.")
+                                # Try extracting from {"citations": [...]} structure
+                                if extracted_citations is None and isinstance(data, dict):
+                                    potential_list_alt = data.get('citations')
+                                    if isinstance(potential_list_alt, list):
+                                        extracted_citations = potential_list_alt
+                                        logger.debug("Extracted citations using 'citations' key.")
                                 
-                                processed_chunk_for_answer = ""
-                                remaining_token_part = raw_token
+                                # If not found or not a list, check if the data itself is the list
+                                if extracted_citations is None and isinstance(data, list):
+                                     extracted_citations = data
+                                     logger.debug("Extracted citations directly from data object.")
                                 
-                                while remaining_token_part:
-                                    if not st.session_state.parsing_think_block:
-                                        start_tag_pos = remaining_token_part.find("<think>")
-                                        if start_tag_pos == -1:
-                                            processed_chunk_for_answer += remaining_token_part
-                                            remaining_token_part = "" 
-                                        else:
-                                            processed_chunk_for_answer += remaining_token_part[:start_tag_pos]
-                                            # <<< Log state change >>>
-                                            logger.debug("Entering think block parsing state.")
-                                            st.session_state.parsing_think_block = True
-                                            st.session_state.current_think_content = "" 
-                                            remaining_token_part = remaining_token_part[start_tag_pos + len("<think>"):]
-                                    else: # Inside think block
-                                        end_tag_pos = remaining_token_part.find("</think>")
-                                        if end_tag_pos == -1:
-                                            st.session_state.current_think_content += remaining_token_part
-                                            # <<< Log accumulation >>>
-                                            logger.debug(f"Accumulated think content chunk: {repr(remaining_token_part)}")
-                                            remaining_token_part = "" 
-                                        else:
-                                            think_chunk_before_end = remaining_token_part[:end_tag_pos]
-                                            st.session_state.current_think_content += think_chunk_before_end
-                                            # <<< Log end found and content before display >>>
-                                            logger.debug(f"Found </think>. Final accumulated content: {repr(st.session_state.current_think_content)}")
-                                            
-                                            # Display expander directly (only once)
-                                            if not st.session_state.think_displayed:
-                                                logger.debug("Attempting to display expander directly.")
-                                                try:
-                                                    # Render expander directly in the chat message area
-                                                    with st.expander("思考过程", expanded=False):
-                                                        st.markdown(f'<div style="color: gray; font-size: 0.8em;">{st.session_state.current_think_content}</div>', unsafe_allow_html=True)
-                                                    st.session_state.think_displayed = True
-                                                    logger.debug("Expander displayed directly and think_displayed set to True.")
-                                                except Exception as display_e:
-                                                    logger.error(f"Error displaying expander: {display_e}", exc_info=True)
-                                            else:
-                                                 logger.debug("Expander already displayed, skipping.")
-                                                 
-                                            st.session_state.parsing_think_block = False # Exit think state
-                                            remaining_token_part = remaining_token_part[end_tag_pos + len("</think>"):] 
-                                            # <<< Log state change and remaining part >>>
-                                            logger.debug(f"Exiting think block parsing state. Remaining token part: {repr(remaining_token_part)}")
-                                
-                                # Append the processed answer part 
-                                if processed_chunk_for_answer:
-                                    full_answer += processed_chunk_for_answer
-                                    # Only update the answer placeholder here
-                                    answer_placeholder.markdown(full_answer + "▌") 
-                                
-                        except (IndexError, json.JSONDecodeError) as e:
-                            logger.warning(f"无法解析流数据: {line}. 错误: {e}")
-                            continue 
-                            
-                # --- End of loop ---
-                # Final check: If stream ends while still parsing think block (error?)
-                if st.session_state.parsing_think_block and not st.session_state.think_displayed:
-                     logger.warning("Stream ended while inside a think block without closing tag.")
-                     # Optionally display incomplete think block?
-                     # with think_container.container():
-                     #    with st.expander("思考过程 (未结束)", expanded=True):
-                     #        st.markdown(f'<div style="color: orange; font-size: 0.9em;">{st.session_state.current_think_content}</div>', unsafe_allow_html=True)
-                     pass # Decide how to handle this
+                                # If we got a list one way or another
+                                if extracted_citations is not None:
+                                    st.session_state.current_citations = extracted_citations
+                                    logger.info(f"Stored citations in session state: {st.session_state.current_citations}")
+                                else:
+                                    logger.warning(f"Received citations event, but could not extract a valid list from data: {data}")
+                            elif event_to_process == 'error':
+                                detail = data.get('detail', data.get('data', '未知流错误')) # Backend might yield {'type': 'error', 'data': ...}
+                                answer_placeholder.error(f"流处理错误: {detail}")
+                                logger.error(f"SSE Error Event: {detail}")
+                                error_occurred = True
+                                status.update(label="流处理出错", state="error", expanded=True)
+                            elif event_to_process == 'end': # Handle potential end event with data?
+                                logger.info(f"SSE End Event received with data: {data}")
+                                status.update(label="流处理完成.", state="complete", expanded=False)
+                                break
+                            elif event_to_process == 'chunk': # Default data processing
+                                token = data.get("token", data.get("data")) # Backend might send {'token':...} or {'type':'chunk', 'data':...}
+                                if token:
+                                    token_count += 1
+                                    if first_token_time is None:
+                                        first_token_time = time.time()
+                                    full_answer += token
+                                    answer_placeholder.markdown(full_answer + "▌")
+                                else:
+                                     logger.warning(f"Received chunk/data event, but no 'token' or 'data' key found: {data}")
+                            # Handle other event types like 'debug' if needed
+                            elif event_to_process == 'debug':
+                                 logger.debug(f"Debug info from stream: {data.get('data', data)}")
+                                 # Optionally display debug info?
+                                 # time_info_placeholder.caption(f"Debug: {data.get('data', data)}")
+                            else:
+                                logger.warning(f"Received unhandled SSE event type '{event_to_process}' with data: {data}")
 
-            # Calculate final timings
+                        except json.JSONDecodeError as e:
+                            # Handle cases where data might not be JSON (e.g., simple text chunk without event type)
+                            # If it wasn't explicitly typed, assume it's a text chunk
+                            if event_to_process == 'chunk': 
+                                token = data_str # Treat the raw string as the token
+                                token_count += 1
+                                if first_token_time is None:
+                                    first_token_time = time.time()
+                                full_answer += token
+                                answer_placeholder.markdown(full_answer + "▌")
+                            else:
+                                logger.warning(f"Could not parse JSON for event '{event_to_process}': {line}. Error: {e}")
+                        except Exception as parse_e:
+                            logger.error(f"Error processing SSE data line: {line}. Error: {parse_e}", exc_info=True)
+                            # Maybe display a generic processing error?
+                            # answer_placeholder.warning("处理回复时发生错误。")
+                            # error_occurred = True # Consider setting error flag
+
+                    elif line.strip() == "": # Empty line separates messages in SSE
+                        current_event_type = None # Reset event type after a message
+                    else:
+                        # Handle lines that don't conform to SSE format? Maybe log?
+                        logger.warning(f"Received non-SSE formatted line (ignoring): {line}")
+                        
+                # --- Stream processing loop ends here --- 
+
+            # --- After loop, before saving state --- 
             end_time = time.time()
             total_elapsed = end_time - start_time
             tokens_per_second = token_count / total_elapsed if total_elapsed > 0 and token_count > 0 else 0
@@ -563,50 +687,89 @@ if query:
                  time_info_text = (
                      f"⏱️ 总耗时: {total_elapsed:.2f}秒 | "
                      f"首token延迟: {first_token_latency:.2f}秒 | "
-                     f"速度: {tokens_per_second:.1f} token/秒 ({token_count} tokens) | " # Added token count
+                     f"速度: {tokens_per_second:.1f} token/秒 ({token_count} tokens) | "
                      f"开始于: {start_datetime}"
                  )
             else:
-                 # Case where no tokens were received (maybe only think or error)
                  time_info_text = f"⏱️ 总耗时: {total_elapsed:.2f}秒 (未收到答案 token)"
 
-            # Final UI update and state saving
+            # --- ADD DEBUG LOG --- 
+            logger.info(f"Checking citations before rendering: {st.session_state.current_citations}")
+            # --- END DEBUG LOG ---
+
+            # Render citations using the placeholder if received
+            if st.session_state.current_citations and not error_occurred:
+                 with citations_placeholder.expander("查看引用", expanded=True):
+                     for i, citation in enumerate(st.session_state.current_citations):
+                        # Access CitationSourceDetail correctly
+                        details = citation.get('source_details', [{}])[0]
+                        doc_name = details.get('doc_source_name', '未知来源')
+                        text_quote = citation.get('text_quote', '...')
+                        chunk_id = details.get('chunk_id', 'N/A')
+                        chunk_text = details.get('chunk_text', '无内容')
+
+                        st.markdown(f"**[{i+1}] 引用自:** {doc_name}")
+                        st.markdown(f"> {text_quote}")
+                        with st.popover("查看完整来源块", use_container_width=True):
+                            st.markdown(f"##### 来源: {doc_name} (块 ID: {chunk_id})")
+                            st.markdown(f"```\n{chunk_text}\n```")
+                        st.markdown("---")
+
+            # Update final UI elements and save assistant message to state
             if not error_occurred:
                 if full_answer:
-                    answer_placeholder.markdown(full_answer) # Final answer to placeholder
-                    time_info.caption(time_info_text) 
-                    # Append final answer to session state
+                    answer_placeholder.markdown(full_answer) # Final answer update
+                    time_info_placeholder.caption(time_info_text)
+                    # Append assistant message to session state HERE
                     st.session_state.messages.append({
                         "role": "assistant", 
-                        "content": full_answer, # Saved answer is already clean
+                        "content": full_answer,
+                        "citations": st.session_state.current_citations,
                         "response_time": time_info_text 
                     })
-                    # Fetch updated list, but don't rerun immediately
-                    st.session_state.conversation_list = get_conversations() 
-                elif st.session_state.think_displayed: # If only think was displayed
-                    answer_placeholder.info("模型进行了思考，但未生成最终回复。") # Use placeholder
-                    time_info.caption(time_info_text)
-                else: # No error, no think, no answer
-                    answer_placeholder.warning("收到空回复。") # Use placeholder
-                    time_info.caption(time_info_text)
+                    st.session_state.conversation_list = get_conversations() # Update list after successful interaction
+                # Handle empty answer case if needed (e.g., only citations returned?)
+                elif st.session_state.current_citations: # If only citations, maybe show a note?
+                    answer_placeholder.info("已找到相关引用信息。")
+                    time_info_placeholder.caption(time_info_text)
+                    st.session_state.messages.append({
+                        "role": "assistant", 
+                        "content": "", # No text answer
+                        "citations": st.session_state.current_citations,
+                        "response_time": time_info_text 
+                    })
+                    st.session_state.conversation_list = get_conversations()
+                else: # No answer, no citations
+                    answer_placeholder.warning("收到空回复。")
+                    time_info_placeholder.caption(time_info_text)
+                    st.session_state.messages.append({
+                        "role": "assistant", 
+                        "content": "",
+                        "citations": [],
+                        "response_time": time_info_text 
+                    })
+            # Clear the status placeholder at the very end if it still exists
+            status_placeholder.empty()
 
-            # If error occurred, the message should already be in answer_placeholder
-            # Do not append error message to history automatically unless desired
-
-        except requests.exceptions.RequestException as e:
-            error_msg = f"连接错误: 无法连接到 API ({message_stream_url}). 详情: {e}"
-            st.error(error_msg)
-            answer_placeholder.empty()
-            status.update(label="连接失败.", state="error", expanded=True)
-            logger.error(error_msg)
-        except Exception as e:
-            error_msg = f"发生意外错误: {e}"
-            st.error(error_msg)
-            answer_placeholder.empty()
-            status.update(label="处理错误.", state="error", expanded=True)
-            logger.error(error_msg, exc_info=True) # Log stack trace for unexpected errors
+    except requests.exceptions.RequestException as e:
+        # ... (keep existing exception handling) ...
+        error_msg = f"连接错误: 无法连接到 API ({message_stream_url}). 详情: {e}"
+        st.error(error_msg)
+        answer_placeholder.empty()
+        status_placeholder.empty() # Ensure status is cleared on error
+        # Optionally add an error message to session state?
+        # st.session_state.messages.append({"role": "assistant", "content": f"错误: {error_msg}"})
+        logger.error(error_msg)
+    except Exception as e:
+        # ... (keep existing exception handling) ...
+        error_msg = f"发生意外错误: {e}"
+        st.error(error_msg)
+        answer_placeholder.empty()
+        status_placeholder.empty()
+        # st.session_state.messages.append({"role": "assistant", "content": f"错误: {error_msg}"})
+        logger.error(error_msg, exc_info=True)
         
-    # --- End: Modified Input Handling ---
+    # --- End: Modified Input Handling (No explicit rerun needed here) ---
     
 
 

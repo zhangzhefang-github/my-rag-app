@@ -55,17 +55,22 @@ async def generate_answer(
     # --- Prepare messages --- 
     try:
         context = ""
+        # Define a more explicit base instruction
+        base_instruction = "\n请仔细阅读以下提供的文档，并严格根据文档内容回答问题。注意文档中的细节，例如时间、日期、数字和名称。如果需要，请进行简单的逻辑推理。请像一个乐于助人的朋友一样用中文回答。" 
+
         if retrieved_doc_contents and any(retrieved_doc_contents):
             logging.info(f"Using {len(retrieved_doc_contents)} retrieved documents.")
-            context += "Based on the following documents, please answer the question:\n\n"
+            # Modify the lead-in text for documents
+            context += "请根据以下文档回答问题:\n\n" 
             for i, doc_content in enumerate(retrieved_doc_contents):
-                context += f"Document {i+1}:\n{doc_content}\n\n"
+                context += f"文档 {i+1}:\n{doc_content}\n\n"
+            # Append base instruction after the documents
+            system_message_content = context + base_instruction 
         else:
             logging.warning("No relevant documents provided or found. Answering based on general knowledge.")
-            context = "Please answer the following question to the best of your ability." 
+            # Simplify the no-document prompt but include the base instruction
+            system_message_content = "请尽力回答以下问题。" + base_instruction
 
-        system_message_content = context + "\n请像一个乐于助人的朋友一样用中文回答用户的问题。"
-        
         messages = [
             SystemMessage(content=system_message_content),
             HumanMessage(content=query)
@@ -95,7 +100,10 @@ async def generate_answer(
             
             # Clean the response (if needed, or do it in API layer)
             # For simplicity, let's keep the cleaning logic here for now
-            answer = remove_think_block(raw_answer) 
+            # --- Removing the call to remove_think_block --- 
+            # answer = remove_think_block(raw_answer) 
+            answer = raw_answer # Yield the raw answer now
+            # --- End removal ---
             
             logging.info("Successfully generated non-streaming answer.")
             # Yield the single final answer

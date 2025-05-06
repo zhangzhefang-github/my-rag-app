@@ -10,22 +10,25 @@
 
 ## Overview
 
-A simple Retrieval Augmented Generation (RAG) system built with FastAPI. It combines efficient semantic retrieval using Sentence Transformers and FAISS with pluggable Large Language Model (LLM) backends for answering questions based on your documents.
+A simple Retrieval Augmented Generation (RAG) system built with FastAPI and Streamlit. It combines efficient semantic retrieval using Sentence Transformers and FAISS with pluggable Large Language Model (LLM) backends for answering questions based on your documents, featuring structured citations and multi-turn conversation history.
+
+**Current Status (Sprint 2 Complete):** Chunk-based retrieval with **structured citations** is implemented. The system chunks documents, indexes chunks, retrieves relevant chunks, formats context for the LLM, and generates an answer with inline `[index]` markers and a separate list of `Citation` objects. The Streamlit UI correctly displays these citations and maintains conversation history with citations.
 
 ## Project Structure
 
 ```
 my-rag-app/
 ├── README.md
-├── requirements.txt             # Python dependencies
+├── requirements.txt             # Python dependencies (install via `uv pip sync`)
+├── conda-env.yml              # Conda environment definition for core libs (PyTorch, Faiss)
 ├── .env                         # Environment configuration (create this file)
 ├── api.py                       # FastAPI application entry point
 ├── streamlit_app.py             # Streamlit UI application entry point
 ├── app/                         # Core application logic
 │   ├── __init__.py
 │   ├── retriever.py             # Document embedding, indexing, and retrieval (Faiss + Embedding Strategies)
-│   ├── rag_pipeline.py          # RAG pipeline orchestrating retrieval and generation
-│   └── embedding_strategies/    # Pluggable Embedding backend strategies
+│   ├── rag_pipeline.py          # RAG pipeline orchestrating retrieval, context formatting, generation, and citation parsing
+│   ├── embedding_strategies/    # Pluggable Embedding backend strategies (HF, Ollama, OpenAI)
 │   │   ├── __init__.py
 │   │   ├── base.py              # Abstract base class for Embedding strategies
 │   │   ├── config.py            # Pydantic configuration models for embeddings
@@ -33,20 +36,30 @@ my-rag-app/
 │   │   ├── hf_embed.py          # Strategy for local HuggingFace models
 │   │   ├── ollama_embed.py      # Strategy for Ollama embeddings via API
 │   │   └── openai_embed.py      # Strategy for OpenAI embeddings via API
-│   └── llm_strategies/          # Pluggable LLM backend strategies
-│       ├── __init__.py          # Factory function (get_llm_strategy)
-│       ├── base.py              # Abstract base class for LLM strategies
-│       ├── ollama_strategy.py   # Strategy for local Ollama models via LangChain
-│       ├── openai_strategy.py   # Strategy for OpenAI API via LangChain
-│       └── custom_api_strategy.py # Strategy for custom OpenAI-compatible APIs using the openai library
+│   ├── llm_strategies/          # Pluggable LLM backend strategies (Ollama, OpenAI, Custom API)
+│   │   ├── __init__.py          # Factory function (get_llm_strategy)
+│   │   ├── base.py              # Abstract base class for LLM strategies
+│   │   ├── ollama_strategy.py   # Strategy for local Ollama models via LangChain
+│   │   ├── openai_strategy.py   # Strategy for OpenAI API via LangChain
+│   │   └── custom_api_strategy.py # Strategy for custom OpenAI-compatible APIs using the openai library
+│   ├── chunking_strategies/     # Pluggable Chunking Strategies (RecursiveCharacter)
+│   │   ├── __init__.py          # Factory function (get_chunker)
+│   │   ├── base.py              # Abstract base class for Chunking strategies
+│   │   └── recursive_character.py # Strategy using RecursiveCharacterTextSplitter
+│   └── models/                  # Pydantic models for data structures
+│       ├── __init__.py
+│       └── document.py          # Defines ParsedDocument, Chunk, Citation, API models etc.
 ├── data/
-│   ├── documents/               # Place your source documents (.txt) here
-│   └── indexes/                 # Stores Faiss index files and document mappings
+│   ├── documents/               # Place your source documents (.txt, .md, .pdf, .docx) here
+│   └── indexes/                 # Stores Faiss index files and chunk mappings (e.g., chunks.json)
 ├── models/                      # Local Sentence Transformer model cache directory
 ├── logs/                        # Log files directory
-├── public/                      # Static files for the frontend UI
-│   ├── index.html
-│   └── ... (assets, static js/css)
+├── docs/                        # Documentation and images
+│   ├── images/
+│   │   └── rag_sequence_diagram.png
+│   │   └── ui_main.png
+│   │   └── ui_citations.png # <<< ADDED: Screenshot of citations
+│   └── ...
 ├── tests/                       # Unit and integration tests
 │   └── ...
 └── utils/                       # Utility modules
@@ -62,30 +75,26 @@ my-rag-app/
 
 ### System Flow Diagram
 
-The following diagram illustrates the sequence of operations during a streaming query:
+The following diagram illustrates the sequence of operations during a streaming query, including citation generation:
 
 ![Streaming Query Sequence Diagram](docs/images/rag_sequence_diagram.png)
 
 ## Installation
 
 1.  **Create Environment and Install Core Libraries:**
-    Use the `conda-env.yml` file to create the Conda environment and install core dependencies (Python, PyTorch, Faiss, NumPy) managed by Conda.
+    Use the `conda-env.yml` file to create the Conda environment (`rag-gpu` by default) and install core dependencies (Python, PyTorch, Faiss, NumPy). Remember to edit `conda-env.yml` first if you need specific CUDA versions or want the CPU version of Faiss.
     ```bash
-    # Ensure you have Conda installed
     conda env create -f conda-env.yml
     ```
-    *(Note: You might need to edit `conda-env.yml` first to select the correct `faiss-cpu` or `faiss-gpu` line and potentially adjust the `pytorch-cuda` version based on your system.)*
 
 2.  **Activate the Environment:**
-    Activate the newly created environment (the default name is `rag-gpu`, check `conda-env.yml` if you changed it).
     ```bash
     conda activate rag-gpu
     ```
 
 3.  **Install Application Dependencies using uv:**
-    Install the remaining Python application dependencies using `uv`. `uv` reads the `requirements.txt` file (which contains exact versions locked by the developers using `requirements.in`) and ensures your environment matches precisely.
+    Install the remaining Python application dependencies using `uv` (which reads `requirements.txt`).
     ```bash
-    # uv should have been installed in the previous step via conda-env.yml
     uv pip sync requirements.txt
     ```
 
@@ -93,124 +102,70 @@ Your environment is now ready!
 
 ## Configuration (.env file)
 
-Create a `.env` file in the project root directory (`my-rag-app/`) to configure the application. Use the following template:
+Create a `.env` file in the project root (`my-rag-app/`) to configure the application. Key settings include:
 
-```dotenv
-# --- LLM Provider Selection ---
-# Select the backend LLM service. Options: 'ollama', 'custom_api', 'openai'
-LLM_PROVIDER=ollama # Or custom_api, openai
+*   `API_BASE_URL`: For the Streamlit frontend to connect to the backend.
+*   `LLM_PROVIDER`: Select the LLM backend (`ollama`, `custom_api`, `openai`).
+*   **Provider Specific Settings**: API keys, base URLs, model names for the selected `LLM_PROVIDER`.
+*   `RETRIEVER_MODEL`, `RERANKER_MODEL`, `USE_RERANKER`, `TOP_K`, etc.: Configure retrieval and reranking.
+*   `CHUNKING_STRATEGY`, `CHUNK_SIZE`, `CHUNK_OVERLAP`: Configure document chunking.
+*   `DOCS_DIR`, `INDEX_DIR`: Specify data directories.
+*   `LOG_LEVEL`: Set logging verbosity.
 
-# --- Ollama Configuration (if LLM_PROVIDER=ollama) ---
-OLLAMA_HOST=http://localhost:11434       # Your Ollama service URL
-OLLAMA_MODEL=qwen3:0.6b                 # Model name available in Ollama (e.g., run 'ollama list')
-# OLLAMA_TEMPERATURE=0.7                 # (Optional) Sampling temperature
-# OLLAMA_NUM_PREDICT=256                # (Optional) Max tokens for Ollama
+Refer to the template within the `.env.example` file (or the previous README version) for the full list of variables.
 
-# --- Custom API Configuration (if LLM_PROVIDER=custom_api) ---
-CUSTOM_API_KEY="sk-your_custom_key"       # API Key for your custom endpoint
-CUSTOM_API_BASE="https://api.fe8.cn/v1"   # Base URL for your custom endpoint
-CUSTOM_API_MODEL="gpt-4o-mini"            # Model name available at the custom endpoint
-# CUSTOM_API_TEMPERATURE=0.7             # (Optional)
-# CUSTOM_API_MAX_TOKENS=1024              # (Optional)
-
-# --- OpenAI Configuration (if LLM_PROVIDER=openai) ---
-# Uses the official OpenAI API via LangChain.
-# Requires OPENAI_API_KEY to be set. Base URL is optional.
-OPENAI_API_KEY="sk-your_openai_key"       # Your official OpenAI API Key
-# OPENAI_API_BASE="https://api.openai.com/v1" # (Optional) Use if you have a proxy
-OPENAI_MODEL="gpt-4o-mini"                # Official OpenAI model name
-# OPENAI_TEMPERATURE=0.7                 # (Optional)
-# OPENAI_MAX_TOKENS=1024                  # (Optional)
-
-# --- Retrieval Settings ---
-TOP_K=3                               # Number of document chunks to retrieve per query
-RETRIEVER_MODEL="moka-ai/m3e-base"    # Sentence Transformer model for embeddings
-LOCAL_MODEL_DIR="models"              # Directory to cache embedding models
-INDEX_DIR="data/indexes"              # Directory to store Faiss index and doc mappings
-DOCS_DIR="data/documents"             # Directory containing source documents
-
-# --- System Settings ---
-LOG_LEVEL="INFO"                      # Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-# LOW_MEMORY_MODE=false              # (Currently less relevant as local generation is removed)
-# APP_PORT=8000                      # Port is now read from api.py (main block) or can be set here
-```
-
-**Important**:
-*   Set `LLM_PROVIDER` to choose your desired backend.
-*   Fill in the corresponding configuration variables for the selected provider (API keys, URLs, model names).
-*   Ensure the model name you specify for Ollama or Custom API is actually available at that service endpoint.
-*   Make sure the `DOCS_DIR` and `INDEX_DIR` paths are correct.
+**Important**: Ensure the chosen LLM (`OLLAMA_MODEL`, `CUSTOM_API_MODEL`, `OPENAI_MODEL`) is capable of following instructions to produce the structured citation format required by `RAGPipeline`. Smaller models may struggle. `gpt-4o-mini` has been tested successfully.
 
 ## Features
 
 *   **Retrieval Augmented Generation (RAG):** Answers questions based on provided documents.
-*   **FastAPI Backend:** Provides a robust API interface.
-*   **Efficient Semantic Search:** Uses configurable embedding strategies (HuggingFace, OpenAI, Ollama via `app/embedding_strategies`) and FAISS for finding relevant document chunks.
-*   **Pluggable LLM Backends:** Easily switch between different LLM providers (Ollama, OpenAI, Custom OpenAI-compatible API) via configuration using a Strategy Pattern (`app/llm_strategies`).
-*   **Streaming API:** Supports Server-Sent Events (SSE) for real-time answer generation (if the selected LLM strategy supports streaming).
-*   **GPU Support:** Automatically utilizes GPU for Sentence Transformer embeddings and FAISS indexing (if `faiss-gpu` is installed and GPU is available).
-*   **Simple Web UI:** A basic frontend is included for interaction (served from `/public`).
+*   **Structured Citations:** Generates answers with inline references (`[0]`, `[1]`) and provides detailed source information (document name, original text quote, chunk ID) for each reference. (**Sprint 2 Complete**)
+*   **Multi-Turn Conversation History:** Remembers previous turns in the conversation, including their citations, within the Streamlit UI.
+*   **FastAPI Backend:** Robust API interface with SSE support.
+*   **Streamlit Frontend:** Interactive user interface for chatting, viewing citations, managing conversations, and uploading documents.
+*   **Chunk-Based Semantic Search:** Configurable chunking strategies (`RecursiveCharacter`), pluggable embedding models (HuggingFace, OpenAI, Ollama), and FAISS indexing. (**Sprint 1 Complete**)
+*   **Pluggable LLM Backends:** Easily switch between Ollama, OpenAI, and custom OpenAI-compatible APIs.
+*   **Streaming API:** Real-time answer generation via Server-Sent Events.
+*   **Document Upload:** Supports `.txt`, `.md`, `.pdf`, `.docx` uploads via API or Streamlit UI. Indexing is updated automatically.
+*   **GPU Support:** Automatic GPU utilization for embeddings and FAISS (if correctly installed).
 
 ### Application Interface
 
-Here's a glimpse of the main chat interface:
+Main chat UI with structured citations:
 
-![Main Chat UI](docs/images/ui_main.png)
-
-### GPU Acceleration
-
-GPU acceleration is primarily handled by ensuring the correct GPU versions of **PyTorch** and **Faiss** are installed during **Step 1** of the installation process via the `conda-env.yml` file.
-
-*   Edit `conda-env.yml` **before** running `conda env create`:
-    *   Ensure the `pytorch-cuda=XX.X` line matches your system's CUDA version.
-    *   Comment out `faiss-cpu` and uncomment `faiss-gpu`.
-*   If you need to switch between CPU and GPU versions *after* creating the environment:
-    1.  Activate the environment: `conda activate rag-gpu`
-    2.  Uninstall the incorrect Faiss version: `conda uninstall faiss-cpu` (or `faiss-gpu`)
-    3.  Install the correct Faiss version: `conda install faiss-gpu -c pytorch` (or `faiss-cpu`)
-    4.  You might also need to adjust PyTorch/CUDA versions if changing significantly.
-    5.  Re-sync pip dependencies just in case: `uv pip sync requirements.txt`
+![Chat UI with Citations](docs/images/ui_citations.png)
+*(Note: Please add an updated screenshot named `ui_citations.png` to the `docs/images/` directory showing the citation expander and popover)*
 
 ## Usage
 
-### 1. Prepare Documents
+1.  **Prepare Documents:** Place source documents in `data/documents/`.
+2.  **Configure Backend:** Create and edit the `.env` file.
+3.  **Run the API Server:**
+    ```bash
+    conda activate rag-gpu
+    uvicorn api:app --host 0.0.0.0 --port 8000 --reload
+    ```
+    服务器将加载模型并构建/加载索引。上传的文档会触发索引更新。
+4.  **Run the Streamlit UI:**
+    ```bash
+    conda activate rag-gpu
+    streamlit run streamlit_app.py
+    ```
+5.  **Interact:** Open the Streamlit UI URL (e.g., `http://localhost:8501`) in your browser.
 
-Place your knowledge documents (plain text `.txt` files) in the `data/documents/` directory.
+## Development Roadmap
 
-### 2. Configure Backend
-
-Edit the `.env` file in the project root:
-*   Set `LLM_PROVIDER` to `ollama`, `custom_api`, or `openai`.
-*   Fill in the required API keys, URLs, and model names for your chosen provider.
-*   Adjust `RETRIEVER_MODEL`, `TOP_K`, etc. if needed.
-
-### 3. Run the API Server
-
-Open your terminal in the project root (`my-rag-app/`) and run:
-
-```bash
-# Ensure your conda/virtual environment is activated
-# Make sure OLLAMA_HOST env var is unset or set correctly if using Ollama
-# unset OLLAMA_HOST # (If you suspect a shell variable overrides .env)
-
-# Start the FastAPI server using Uvicorn
-uvicorn api:app --host 0.0.0.0 --port 8000 --reload
-```
-*(The port (8000) is default, set `APP_PORT` in `.env` or check `api.py`)*
-
-The server will start, load the embedding model, build/load the FAISS index for documents in `data/documents/`, and initialize the selected LLM strategy.
-
-### 4. Interact
-
-*   **Web UI:** Open your browser and navigate to `http://localhost:8000/ui`.
-*   **API Docs:** Access the interactive API documentation (Swagger UI) at `http://localhost:8000/docs`. You can test API endpoints here.
-*   **API Endpoints:**
-    *   `/query` (POST): Non-streaming query.
-    *   `/query/stream` (POST): Streaming query via SSE.
-    *   `/conversations/.../messages` (POST): Streaming query within a conversation context via SSE.
-    *   See `/docs` for more details on all endpoints.
-
-*   **Streamlit UI (Optional):** If `streamlit_app.py` is configured and run, access it at `http://localhost:8501` (default Streamlit port).
+*   **Sprint 0 (已完成):** Define core data models (`ParsedDocument`, `Chunk`, `Citation`)、API 模式和策略接口。
+*   **Sprint 1 (已完成):** 实现分块集成 (`RecursiveCharacterChunkingStrategy`)，更新 `Retriever` 处理 `Chunk` 对象，临时调整流水线，临时的 API/UI 用于原始来源。
+*   **Sprint 2 (已完成):** 在 `RAGPipeline` 中实现结构化引用生成，更新 API 以返回带有 `citations` 的 `QueryResponse`，更新 Streamlit UI 以渲染结构化引用并处理历史记录。调试了 LLM 指令遵循和数据模型不一致问题。
+*   **Sprint 3 (下一步):** 使用 RAGAS 框架实现 RAG 评估基线。开发脚本并可能将基本评估指标集成到工作流中。
+*   **Sprint 4 (未来):**
+    *   高级 RAG 技术（例如 HyDE、句子窗口检索、父文档检索器）。
+    *   根据反馈优化 UI/UX。
+    *   抽象向量存储 (`BaseVectorStore`) 以便更容易地切换后端（例如 ChromaDB, Qdrant）。
+    *   增强的文档预处理和元数据提取。
+    *   更健壮的错误处理和日志记录。
+    *   异步处理改进。
 
 ---
 
@@ -220,22 +175,25 @@ The server will start, load the embedding model, build/load the FAISS index for 
 
 ## 概述
 
-一个基于 FastAPI 构建的简单检索增强生成 (RAG) 系统。它结合了使用 Sentence Transformers 和 FAISS 实现的高效语义检索，以及可插拔的大语言模型 (LLM) 后端，用于根据您提供的文档回答问题。
+一个基于 FastAPI 和 Streamlit 构建的简单检索增强生成 (RAG) 系统。它结合了使用 Sentence Transformers 和 FAISS 实现的高效语义检索，以及可插拔的大语言模型 (LLM) 后端，用于根据您的文档回答问题，并提供结构化引用和多轮对话历史记录。
+
+**当前状态 (Sprint 2 完成):** 已实现基于块的检索和**结构化引用**。系统对文档进行分块，索引块，检索相关块，为 LLM 格式化上下文，并生成带有内联 `[索引]` 标记和独立 `Citation` 对象列表的答案。Streamlit UI 能正确显示这些引用，并维护包含引用的对话历史。
 
 ## 项目结构
 
 ```
 my-rag-app/
 ├── README.md
-├── requirements.txt             # Python 依赖库
-├── .env                         # 环境变量配置文件 (需自行创建)
-├── api.py                       # FastAPI 应用入口点
-├── streamlit_app.py             # Streamlit UI 应用入口点
+├── requirements.txt             # Python 依赖 (通过 `uv pip sync` 安装)
+├── conda-env.yml              # Conda 环境定义 (核心库: PyTorch, Faiss)
+├── .env                         # 环境配置 (需创建此文件)
+├── api.py                       # FastAPI 应用入口
+├── streamlit_app.py             # Streamlit UI 应用入口
 ├── app/                         # 核心应用逻辑
 │   ├── __init__.py
-│   ├── retriever.py             # 文档嵌入、索引和检索 (Faiss + Embedding Strategies)
-│   ├── rag_pipeline.py          # RAG 流水线，协调检索和生成
-│   └── embedding_strategies/    # 可插拔的 Embedding 后端策略
+│   ├── retriever.py             # 文档嵌入、索引和检索 (Faiss + 嵌入策略)
+│   ├── rag_pipeline.py          # RAG 流水线，编排检索、上下文格式化、生成和引用解析
+│   ├── embedding_strategies/    # 可插拔的嵌入后端策略 (HF, Ollama, OpenAI)
 │   │   ├── __init__.py
 │   │   ├── base.py              # Embedding 策略的抽象基类
 │   │   ├── config.py            # Embedding 的 Pydantic 配置模型
@@ -243,21 +201,31 @@ my-rag-app/
 │   │   ├── hf_embed.py          # 本地 HuggingFace 模型策略
 │   │   ├── ollama_embed.py      # 通过 API 调用 Ollama Embedding 的策略
 │   │   └── openai_embed.py      # 通过 API 调用 OpenAI Embedding 的策略
-│   └── llm_strategies/          # 可插拔的 LLM 后端策略
-│       ├── __init__.py          # Factory function (get_llm_strategy)
-│       ├── base.py              # Abstract base class for LLM strategies
-│       ├── ollama_strategy.py   # 通过 LangChain 与本地 Ollama 模型交互的策略
-│       ├── openai_strategy.py   # 通过 LangChain 调用 OpenAI API 的策略
-│       └── custom_api_strategy.py # 使用 openai 库调用自定义 OpenAI 兼容 API 的策略
+│   ├── llm_strategies/          # 可插拔的 LLM 后端策略 (Ollama, OpenAI, Custom API)
+│   │   ├── __init__.py          # Factory function (get_llm_strategy)
+│   │   ├── base.py              # Abstract base class for LLM strategies
+│   │   ├── ollama_strategy.py   # 通过 LangChain 与本地 Ollama 模型交互的策略
+│   │   ├── openai_strategy.py   # 通过 LangChain 调用 OpenAI API 的策略
+│   │   └── custom_api_strategy.py # 使用 openai 库调用自定义 OpenAI 兼容 API 的策略
+│   ├── chunking_strategies/     # 可插拔的分块策略 (RecursiveCharacter)
+│   │   ├── __init__.py          # Factory function (get_chunker)
+│   │   ├── base.py              # 分块策略的抽象基类
+│   │   └── recursive_character.py # 使用 RecursiveCharacterTextSplitter 的策略
+│   └── models/                  # Pydantic 数据模型
+│       ├── __init__.py
+│       └── document.py          # 定义 ParsedDocument, Chunk, Citation, API 模型等
 ├── data/
-│   ├── documents/               # 存放原始知识文档 (.txt 文件)
-│   └── indexes/                 # 存放 Faiss 索引文件和文档映射
+│   ├── documents/               # 在此处放置源文档 (.txt, .md, .pdf, .docx)
+│   └── indexes/                 # 存储 Faiss 索引文件和块映射 (例如, chunks.json)
 ├── models/                      # 本地 Sentence Transformer 模型缓存目录
 ├── logs/                        # 日志文件目录
-├── public/                      # 前端 UI 静态文件
-│   ├── index.html
-│   └── ... (assets, static js/css)
-├── tests/                       # 单元测试和集成测试
+├── docs/                        # 文档和图片
+│   ├── images/
+│   │   └── rag_sequence_diagram.png
+│   │   └── ui_main.png
+│   │   └── ui_citations.png # <<< 新增: 引用界面截图
+│   └── ...
+├── tests/                       # 单元和集成测试
 │   └── ...
 └── utils/                       # 工具模块
     ├── __init__.py
@@ -272,30 +240,26 @@ my-rag-app/
 
 ### 系统流程图
 
-下图展示了处理流式查询时的操作顺序：
+下图说明了流式查询期间的操作顺序，包括引用生成：
 
 ![流式查询时序图](docs/images/rag_sequence_diagram.png)
 
 ## 安装
 
 1.  **创建环境并安装核心库:**
-    使用 `conda-env.yml` 文件创建 Conda 环境并安装由 Conda 管理的核心依赖（Python, PyTorch, Faiss, NumPy）。
+    使用 `conda-env.yml` 文件创建 Conda 环境（默认为 `rag-gpu`）并安装核心依赖项（Python, PyTorch, Faiss, NumPy）。如果需要特定的 CUDA 版本或 Faiss 的 CPU 版本，请记得先编辑 `conda-env.yml`。
     ```bash
-    # 确保已安装 Conda
     conda env create -f conda-env.yml
     ```
-    *(注意: 您可能需要先编辑 `conda-env.yml` 文件，选择正确的 `faiss-cpu` 或 `faiss-gpu` 行，并可能需要根据您的系统调整 `pytorch-cuda` 版本。)*
 
 2.  **激活环境:**
-    激活新创建的环境（默认名称为 `rag-gpu`，如果您修改了 `conda-env.yml`，请检查其中的名称）。
     ```bash
     conda activate rag-gpu
     ```
 
 3.  **使用 uv 安装应用依赖:**
-    使用 `uv` 安装剩余的 Python 应用依赖。`uv` 会读取 `requirements.txt` 文件（其中包含开发者使用 `requirements.in` 锁定的精确版本），并确保您的环境与之精确匹配。
+    使用 `uv` 安装剩余的 Python 应用依赖项（它会读取 `requirements.txt`）。
     ```bash
-    # uv 应已在上一步通过 conda-env.yml 安装
     uv pip sync requirements.txt
     ```
 
@@ -303,121 +267,69 @@ my-rag-app/
 
 ## 配置 (.env 文件)
 
-Create a `.env` file in the project root directory (`my-rag-app/`) to configure the application. Use the following template:
+在项目根目录 (`my-rag-app/`) 中创建 `.env` 文件以配置应用程序。关键设置包括：
 
-```dotenv
-# --- LLM 提供商选择 ---
-# 选择后端 LLM 服务。可选值: 'ollama', 'custom_api', 'openai'
-LLM_PROVIDER=ollama # 或者 custom_api, openai
+*   `API_BASE_URL`:供 Streamlit 前端连接到后端。
+*   `LLM_PROVIDER`: 选择 LLM 后端 (`ollama`, `custom_api`, `openai`)。
+*   **特定提供商设置**: 所选 `LLM_PROVIDER` 的 API 密钥、基础 URL、模型名称。
+*   `RETRIEVER_MODEL`, `RERANKER_MODEL`, `USE_RERANKER`, `TOP_K` 等: 配置检索和重排序。
+*   `CHUNKING_STRATEGY`, `CHUNK_SIZE`, `CHUNK_OVERLAP`: 配置文档分块。
+*   `DOCS_DIR`, `INDEX_DIR`: 指定数据目录。
+*   `LOG_LEVEL`: 设置日志详细程度。
 
-# --- Ollama 配置 (如果 LLM_PROVIDER=ollama) ---
-OLLAMA_HOST=http://localhost:11434       # 你的 Ollama 服务 URL
-OLLAMA_MODEL=qwen3:0.6b                 # Ollama 中可用的模型名称 (例如，运行 'ollama list')
-# OLLAMA_TEMPERATURE=0.7                 # (可选) 采样温度
-# OLLAMA_NUM_PREDICT=256                # (可选) Ollama 的最大 Token 数
+请参考 `.env.example` 文件（或之前的 README 版本）获取完整的变量列表。
 
-# --- 自定义 API 配置 (如果 LLM_PROVIDER=custom_api) ---
-CUSTOM_API_KEY="sk-your_custom_key"       # 你的自定义端点的 API Key
-CUSTOM_API_BASE="https://api.fe8.cn/v1"   # 你的自定义端点的 Base URL
-CUSTOM_API_MODEL="gpt-4o-mini"            # 自定义端点可用的模型名称
-# CUSTOM_API_TEMPERATURE=0.7             # (可选)
-# CUSTOM_API_MAX_TOKENS=1024              # (可选)
+**重要提示**: 确保所选的 LLM (`OLLAMA_MODEL`, `CUSTOM_API_MODEL`, `OPENAI_MODEL`) 能够遵循指令以生成 `RAGPipeline` 所需的结构化引用格式。较小的模型可能难以胜任。`gpt-4o-mini` 已成功测试。
 
-# --- OpenAI 配置 (如果 LLM_PROVIDER=openai) ---
-# 通过 LangChain 使用官方 OpenAI API。
-# 需要设置 OPENAI_API_KEY。 Base URL 是可选的。
-OPENAI_API_KEY="sk-your_openai_key"       # 你的官方 OpenAI API Key
-# OPENAI_API_BASE="https://api.openai.com/v1" # (可选) 如果你使用代理
-OPENAI_MODEL="gpt-4o-mini"                # 官方 OpenAI 模型名称
-# OPENAI_TEMPERATURE=0.7                 # (可选)
-# OPENAI_MAX_TOKENS=1024                  # (可选)
-
-# --- 检索设置 ---
-TOP_K=3                               # 每次查询检索的文档片段数量
-RETRIEVER_MODEL="moka-ai/m3e-base"    # 用于嵌入的 Sentence Transformer 模型
-LOCAL_MODEL_DIR="models"              # 缓存嵌入模型的目录
-INDEX_DIR="data/indexes"              # 存储 Faiss 索引和文档映射的目录
-DOCS_DIR="data/documents"             # 包含源文档的目录
-
-# --- 系统设置 ---
-LOG_LEVEL="INFO"                      # 日志级别 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-# LOW_MEMORY_MODE=false              # (目前关联性较低，因为本地生成已移除)
-# APP_PORT=8000                      # 端口现在从 api.py (主代码块) 读取, 但也可在此处设置
-```
-
-**重要提示**:
-*   设置 `LLM_PROVIDER` 来选择您希望使用的后端。
-*   为所选的提供商填写相应的配置变量（API 密钥、URL、模型名称等）。
-*   确保您为 Ollama 或自定义 API 指定的模型名称在该服务端点确实可用。
-*   确保 `DOCS_DIR` 和 `INDEX_DIR` 路径正确。
-
-## 特性
+## 功能特性
 
 *   **检索增强生成 (RAG):** 基于提供的文档回答问题。
-*   **FastAPI 后端:** 提供健壮的 API 接口。
-*   **高效语义检索:** 使用可配置的 Embedding 策略 (HuggingFace, OpenAI, Ollama, 通过 `app/embedding_strategies`) 和 FAISS 查找相关文档块。
-*   **可插拔 LLM 后端:** 通过配置轻松切换不同的 LLM 提供者 (Ollama, OpenAI, 自定义 OpenAI 兼容 API)，使用策略模式 (`app/llm_strategies`)。
-*   **流式 API:** 支持 Server-Sent Events (SSE) 以实现实时答案生成 (如果所选的 LLM 策略支持流式传输)。
-*   **GPU 支持:** 自动利用 GPU 进行 Sentence Transformer 嵌入和 FAISS 索引（如果安装了 `faiss-gpu` 且 GPU 可用）。
-*   **简单 Web UI:** 包含一个基本的前端界面 (`/public`) 用于交互。
+*   **结构化引用:** 生成带有内联引用 (`[0]`, `[1]`) 的答案，并为每个引用提供详细的来源信息（文档名称、原始文本引用、块 ID）。(**Sprint 2 完成**)
+*   **多轮对话历史:** 在 Streamlit UI 中记住对话的先前轮次，包括它们的引用。
+*   **FastAPI 后端:** 健壮的 API 接口，支持 SSE。
+*   **Streamlit 前端:** 交互式用户界面，用于聊天、查看引用、管理对话和上传文档。
+*   **基于块的语义搜索:** 可配置的分块策略 (`RecursiveCharacter`)，可插拔的嵌入模型 (HuggingFace, OpenAI, Ollama)，以及 FAISS 索引。( **Sprint 1 完成**)
+*   **可插拔的 LLM 后端:** 通过配置轻松在 Ollama、OpenAI 和自定义 OpenAI 兼容 API 之间切换。
+*   **流式 API:** 通过 Server-Sent Events 实现实时答案生成。
+*   **文档上传:** 通过 API 或 Streamlit UI 支持 `.txt`, `.md`, `.pdf`, `.docx` 文件上传。索引会自动更新。
+*   **GPU 支持:** 自动利用 GPU 进行嵌入和 FAISS（如果正确安装）。
 
 ### 应用界面
 
-主聊天界面概览：
+带有结构化引用的主聊天界面：
 
-![主聊天界面](docs/images/ui_main.png)
-
-### GPU 加速
-
-GPU 加速主要通过确保在安装过程的 **步骤 1** 中，通过 `conda-env.yml` 文件安装了正确 GPU 版本的 **PyTorch** 和 **Faiss** 来处理。
-
-*   在运行 `conda env create` **之前**编辑 `conda-env.yml`：
-    *   确保 `pytorch-cuda=XX.X` 行与您系统的 CUDA 版本匹配。
-    *   注释掉 `faiss-cpu` 并取消注释 `faiss-gpu`。
-*   如果需要在创建环境*后*切换 CPU 和 GPU 版本：
-    1.  激活环境: `conda activate rag-gpu`
-    2.  卸载错误的 Faiss 版本: `conda uninstall faiss-cpu` (或 `faiss-gpu`)
-    3.  安装正确的 Faiss 版本: `conda install faiss-gpu -c pytorch` (或 `faiss-cpu`)
-    4.  如果 CUDA 版本等有较大变化，可能也需要调整 PyTorch 版本。
-    5.  为确保一致性，重新同步 pip 依赖: `uv pip sync requirements.txt`
+![带有引用的聊天界面](docs/images/ui_citations.png)
+*(注意: 请在 `docs/images/` 目录下添加一张名为 `ui_citations.png` 的更新截图，显示引用展开器和弹出框)*
 
 ## 使用方法
 
-### 1. 准备文档
+1.  **准备文档:** 将源文档放入 `data/documents/`。
+2.  **配置后端:** 创建并编辑 `.env` 文件。
+3.  **运行 API 服务器:**
+    ```bash
+    conda activate rag-gpu
+    uvicorn api:app --host 0.0.0.0 --port 8000 --reload
+    ```
+    服务器将加载模型并构建/加载索引。上传的文档会触发索引更新。
+4.  **运行 Streamlit UI:**
+    ```bash
+    conda activate rag-gpu
+    streamlit run streamlit_app.py
+    ```
+5.  **交互:** 在浏览器中打开 Streamlit UI URL (例如, `http://localhost:8501`)。
 
-将您的知识文档（纯文本 `.txt` 文件）放入 `data/documents/` 目录中。
+## 开发路线图
 
-### 2. 配置后端
+*   **Sprint 0 (已完成):** 定义核心数据模型 (`ParsedDocument`, `Chunk`, `Citation`)、API 模式和策略接口。
+*   **Sprint 1 (已完成):** 实现分块集成 (`RecursiveCharacterChunkingStrategy`)，更新 `Retriever` 处理 `Chunk` 对象，临时调整流水线，临时的 API/UI 用于原始来源。
+*   **Sprint 2 (已完成):** 在 `RAGPipeline` 中实现结构化引用生成，更新 API 以返回带有 `citations` 的 `QueryResponse`，更新 Streamlit UI 以渲染结构化引用并处理历史记录。调试了 LLM 指令遵循和数据模型不一致问题。
+*   **Sprint 3 (下一步):** 使用 RAGAS 框架实现 RAG 评估基线。开发脚本并可能将基本评估指标集成到工作流中。
+*   **Sprint 4 (未来):**
+    *   高级 RAG 技术（例如 HyDE、句子窗口检索、父文档检索器）。
+    *   根据反馈优化 UI/UX。
+    *   抽象向量存储 (`BaseVectorStore`) 以便更容易地切换后端（例如 ChromaDB, Qdrant）。
+    *   增强的文档预处理和元数据提取。
+    *   更健壮的错误处理和日志记录。
+    *   异步处理改进。
 
-编辑项目根目录下的 `.env` 文件：
-*   将 `LLM_PROVIDER` 设置为 `ollama`, `custom_api`, 或 `openai`。
-*   为您选择的提供商填写所需的 API 密钥、URL 和模型名称。
-*   如果需要，调整 `RETRIEVER_MODEL`, `TOP_K` 等参数。
-
-### 3. 运行 API 服务器
-
-在项目根目录 (`my-rag-app/`) 打开终端并运行：
-
-```bash
-# 确保您的 conda/虚拟环境已激活
-# 如果使用 Ollama，请确保 OLLAMA_HOST 环境变量未设置或设置正确
-# unset OLLAMA_HOST # (如果您怀疑 shell 变量覆盖了 .env 文件)
-
-# 使用 Uvicorn 启动 FastAPI 服务器
-uvicorn api:app --host 0.0.0.0 --port 8000 --reload
-```
-*(端口号 (8000) 是默认值, 请在 `.env` 中设置 `APP_PORT` 或查看 `api.py`)*
-
-服务器将启动，加载嵌入模型，为 `data/documents/` 中的文档构建或加载 FAISS 索引，并初始化所选的 LLM 策略。
-
-### 4. Interact
-
-*   **Web UI:** 打开浏览器并访问 `http://localhost:8000/ui`.
-*   **API 文档:** 在 `http://localhost:8000/docs` 访问交互式 API 文档 (Swagger UI)。您可以在此处测试 API 端点。
-*   **API 端点:**
-    *   `/query` (POST): 非流式查询。
-    *   `/query/stream` (POST): 通过 SSE 进行流式查询。
-    *   `/conversations/.../messages` (POST): 在会话上下文中通过 SSE 进行流式查询。
-    *   请参阅 `/docs` 获取所有端点的更多详细信息。
-
-*   **Streamlit UI (可选):** 如果 `streamlit_app.py` 已配置并运行，请在 `http://localhost:8501` (默认 Streamlit 端口) 访问它。
+---

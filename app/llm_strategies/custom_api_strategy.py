@@ -1,6 +1,6 @@
 # app/llm_strategies/custom_api_strategy.py
 import logging
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 from openai import OpenAI, OpenAIError, AsyncOpenAI
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
 from .base import LLMStrategy
@@ -150,6 +150,51 @@ class CustomAPIStrategy(LLMStrategy):
         except Exception as e:
             logger.error(f"Unexpected error during Custom API stream: {e}", exc_info=True)
             yield f"\n[Unexpected error during Custom API generation: {e}]"
+
+    # --- Add stream_generate method for RAGPipeline compatibility ---
+    async def stream_generate(self, context_str: str, query: Optional[str] = None) -> AsyncGenerator[str, None]:
+        """Generates a streamed response based on context and query using the custom API.
+
+        This method formats the prompt according to the requirements for structured citations
+        and then calls the underlying `astream` method.
+
+        Args:
+            context_str: The formatted context string with source indices.
+            query: The user query.
+
+        Yields:
+            String chunks of the response content delta.
+        """
+        # Use the same detailed prompt template as OllamaStrategy (or adapt if needed for GPT models)
+        # --- SPRINT 2: Revised Prompt Template (More Natural Tone) ---
+        prompt_template = (
+            "你是一个友好且乐于助人的问答机器人。请严格按照以下格式回答问题：\n"
+            "1. **直接回答问题**，使用提供的上下文块。请在严格基于上下文回答的同时，保持友好和稍带对话感的语气。不要包含任何思考过程、前言或与问题无关的评论。\n"
+            "2. 在你的回答中，使用 `[索引]` 标注信息来源的上下文块编号，例如：'天空是蓝色的 [0]。'\n"
+            "3. 如果上下文中没有答案，请明确说明'抱歉，根据我所了解的信息，还无法回答您这个问题呢。'\n" # More friendly refusal
+            "4. 回答完毕后，必须另起一行并只包含 `<<<CITATIONS>>>` 这个标记。\n"
+            "5. 在标记的下一行，提供一个JSON列表，包含你答案中引用的具体文本和来源索引。严格遵循此格式: `[{{\"text_quote\": \"引用的文本...\", \"source_chunk_indices\": [0, 1]}}, ...]`\n"
+            "6. **请务必只输出答案、标记和 JSON 列表，不要有任何其他多余内容。** 用中文回答。\n\n"
+            "--- 上下文块 ---\n{context}\n\n"
+            "--- 问题 ---\n{query}\n\n"
+            "--- 回答 ---"
+        )
+        prompt = prompt_template.format(context=context_str, query=query)
+        # --- End Revised Prompt Definition ---
+
+        # Prepare messages for the astream method
+        messages = [("human", prompt)]
+
+        logger.debug(f"Calling CustomAPIStrategy.astream with revised prompt (natural tone) for model {self.model}: {prompt[:300]}...")
+        
+        # Call the existing astream method and yield its results
+        try:
+            async for chunk in self.astream(messages):
+                yield chunk
+        except Exception as e:
+             logger.error(f"Error in stream_generate calling astream: {e}", exc_info=True)
+             # Yield an error message chunk or re-raise?
+             yield f"\n[Error during Custom API stream_generate: {e}]"
 
     # Note: Implementing streaming would require a different method 
     # that calls client.chat.completions.create(stream=True) and yields results. 
