@@ -10,9 +10,9 @@
 
 ## Overview
 
-A simple Retrieval Augmented Generation (RAG) system built with FastAPI and Streamlit. It combines efficient semantic retrieval using Sentence Transformers and FAISS with pluggable Large Language Model (LLM) backends for answering questions based on your documents, featuring structured citations and multi-turn conversation history.
+A simple Retrieval Augmented Generation (RAG) system built with FastAPI and Streamlit. It combines efficient semantic retrieval using Sentence Transformers and FAISS, **optional reranking** using Cross-Encoders, with pluggable Large Language Model (LLM) backends for answering questions based on your documents, featuring structured citations and multi-turn conversation history.
 
-**Current Status (Sprint 2 Complete):** Chunk-based retrieval with **structured citations** is implemented. The system chunks documents, indexes chunks, retrieves relevant chunks, formats context for the LLM, and generates an answer with inline `[index]` markers and a separate list of `Citation` objects. The Streamlit UI correctly displays these citations and maintains conversation history with citations.
+**Current Status (Sprint 2 + Reranker):** Chunk-based retrieval with structured citations and **optional reranking** is implemented. The system chunks documents, indexes chunks, retrieves relevant chunks (with optional reranking), formats context for the LLM, and generates an answer with inline `[index]` markers and a separate list of `Citation` objects. The Streamlit UI correctly displays these citations and maintains conversation history.
 
 ## Project Structure
 
@@ -26,7 +26,7 @@ my-rag-app/
 ├── streamlit_app.py             # Streamlit UI application entry point
 ├── app/                         # Core application logic
 │   ├── __init__.py
-│   ├── retriever.py             # Document embedding, indexing, and retrieval (Faiss + Embedding Strategies)
+│   ├── retriever.py             # Document embedding, indexing, retrieval (Faiss + Reranker + Embedding Strategies)
 │   ├── rag_pipeline.py          # RAG pipeline orchestrating retrieval, context formatting, generation, and citation parsing
 │   ├── embedding_strategies/    # Pluggable Embedding backend strategies (HF, Ollama, OpenAI)
 │   │   ├── __init__.py
@@ -107,8 +107,17 @@ Create a `.env` file in the project root (`my-rag-app/`) to configure the applic
 *   `API_BASE_URL`: For the Streamlit frontend to connect to the backend.
 *   `LLM_PROVIDER`: Select the LLM backend (`ollama`, `custom_api`, `openai`).
 *   **Provider Specific Settings**: API keys, base URLs, model names for the selected `LLM_PROVIDER`.
-*   `RETRIEVER_MODEL`, `RERANKER_MODEL`, `USE_RERANKER`, `TOP_K`, etc.: Configure retrieval and reranking.
-*   `CHUNKING_STRATEGY`, `CHUNK_SIZE`, `CHUNK_OVERLAP`: Configure document chunking.
+*   **Retrieval Settings**:
+    *   `RETRIEVER_MODEL`: Sentence Transformer model for embeddings (e.g., "moka-ai/m3e-base").
+    *   `USE_RERANKER`: Enable Reranker (`true`/`false`, default: `true`).
+    *   `RERANKER_MODEL`: Reranker model name (e.g., "BAAI/bge-reranker-base", used if `USE_RERANKER=true`).
+    *   `RERANKER_DEVICE`: Reranker device ('cpu', 'cuda', 'auto', default: 'auto').
+    *   `RERANK_K`: Number of initial chunks from FAISS to feed into reranker (default: 2 * `RERANK_TOP_N` or 10).
+    *   `RERANK_TOP_N`: Final number of chunks after reranking (default: same as `TOP_K`).
+    *   `TOP_K`: Default number of chunks if reranker is disabled (default: 5).
+*   **Chunking Settings**:
+    *   `CHUNKING_STRATEGY`: (e.g., 'recursive_character').
+    *   `CHUNK_SIZE`, `CHUNK_OVERLAP`: Parameters for the chosen strategy.
 *   `DOCS_DIR`, `INDEX_DIR`: Specify data directories.
 *   `LOG_LEVEL`: Set logging verbosity.
 
@@ -120,6 +129,7 @@ Refer to the template within the `.env.example` file (or the previous README ver
 
 *   **Retrieval Augmented Generation (RAG):** Answers questions based on provided documents.
 *   **Structured Citations:** Generates answers with inline references (`[0]`, `[1]`) and provides detailed source information (document name, original text quote, chunk ID) for each reference. (**Sprint 2 Complete**)
+*   **Optional Reranking:** Improves relevance by reranking initial retrieval results using a Cross-Encoder model (e.g., bge-reranker). Configurable via `.env`.
 *   **Multi-Turn Conversation History:** Remembers previous turns in the conversation, including their citations, within the Streamlit UI.
 *   **FastAPI Backend:** Robust API interface with SSE support.
 *   **Streamlit Frontend:** Interactive user interface for chatting, viewing citations, managing conversations, and uploading documents.
@@ -127,7 +137,7 @@ Refer to the template within the `.env.example` file (or the previous README ver
 *   **Pluggable LLM Backends:** Easily switch between Ollama, OpenAI, and custom OpenAI-compatible APIs.
 *   **Streaming API:** Real-time answer generation via Server-Sent Events.
 *   **Document Upload:** Supports `.txt`, `.md`, `.pdf`, `.docx` uploads via API or Streamlit UI. Indexing is updated automatically.
-*   **GPU Support:** Automatic GPU utilization for embeddings and FAISS (if correctly installed).
+*   **GPU Support:** Automatic GPU utilization for embeddings, FAISS, and reranking (if configured and available).
 
 ### Application Interface
 
@@ -158,6 +168,7 @@ Main chat UI with structured citations:
 *   **Sprint 0 (已完成):** Define core data models (`ParsedDocument`, `Chunk`, `Citation`)、API 模式和策略接口。
 *   **Sprint 1 (已完成):** 实现分块集成 (`RecursiveCharacterChunkingStrategy`)，更新 `Retriever` 处理 `Chunk` 对象，临时调整流水线，临时的 API/UI 用于原始来源。
 *   **Sprint 2 (已完成):** 在 `RAGPipeline` 中实现结构化引用生成，更新 API 以返回带有 `citations` 的 `QueryResponse`，更新 Streamlit UI 以渲染结构化引用并处理历史记录。调试了 LLM 指令遵循和数据模型不一致问题。
+*   **Reranker Integration (已完成):** Added optional Cross-Encoder reranking to `Retriever`.
 *   **Sprint 3 (下一步):** 使用 RAGAS 框架实现 RAG 评估基线。开发脚本并可能将基本评估指标集成到工作流中。
 *   **Sprint 4 (未来):**
     *   高级 RAG 技术（例如 HyDE、句子窗口检索、父文档检索器）。
@@ -175,9 +186,9 @@ Main chat UI with structured citations:
 
 ## 概述
 
-一个基于 FastAPI 和 Streamlit 构建的简单检索增强生成 (RAG) 系统。它结合了使用 Sentence Transformers 和 FAISS 实现的高效语义检索，以及可插拔的大语言模型 (LLM) 后端，用于根据您的文档回答问题，并提供结构化引用和多轮对话历史记录。
+一个基于 FastAPI 和 Streamlit 构建的简单检索增强生成 (RAG) 系统。它结合了使用 Sentence Transformers 和 FAISS 实现的高效语义检索、使用 Cross-Encoders 的**可选重排序 (reranking)**，以及可插拔的大语言模型 (LLM) 后端，用于根据您的文档回答问题，并提供结构化引用和多轮对话历史记录。
 
-**当前状态 (Sprint 2 完成):** 已实现基于块的检索和**结构化引用**。系统对文档进行分块，索引块，检索相关块，为 LLM 格式化上下文，并生成带有内联 `[索引]` 标记和独立 `Citation` 对象列表的答案。Streamlit UI 能正确显示这些引用，并维护包含引用的对话历史。
+**当前状态 (Sprint 2 + Reranker):** 已实现基于块的检索、结构化引用以及**可选的重排序**。系统对文档进行分块，索引块，检索相关块（可选择进行重排序），为 LLM 格式化上下文，并生成带有内联 `[索引]` 标记和独立 `Citation` 对象列表的答案。Streamlit UI 能正确显示这些引用，并维护对话历史。
 
 ## 项目结构
 
@@ -191,7 +202,7 @@ my-rag-app/
 ├── streamlit_app.py             # Streamlit UI 应用入口
 ├── app/                         # 核心应用逻辑
 │   ├── __init__.py
-│   ├── retriever.py             # 文档嵌入、索引和检索 (Faiss + 嵌入策略)
+│   ├── retriever.py             # 文档嵌入、索引、检索 (Faiss + Reranker + 嵌入策略)
 │   ├── rag_pipeline.py          # RAG 流水线，编排检索、上下文格式化、生成和引用解析
 │   ├── embedding_strategies/    # 可插拔的嵌入后端策略 (HF, Ollama, OpenAI)
 │   │   ├── __init__.py
@@ -240,6 +251,7 @@ my-rag-app/
 
 ### 系统流程图
 
+(理想情况下，流程图应更新以显示初始检索后的重排序步骤)
 下图说明了流式查询期间的操作顺序，包括引用生成：
 
 ![流式查询时序图](docs/images/rag_sequence_diagram.png)
@@ -272,27 +284,39 @@ my-rag-app/
 *   `API_BASE_URL`:供 Streamlit 前端连接到后端。
 *   `LLM_PROVIDER`: 选择 LLM 后端 (`ollama`, `custom_api`, `openai`)。
 *   **特定提供商设置**: 所选 `LLM_PROVIDER` 的 API 密钥、基础 URL、模型名称。
-*   `RETRIEVER_MODEL`, `RERANKER_MODEL`, `USE_RERANKER`, `TOP_K` 等: 配置检索和重排序。
-*   `CHUNKING_STRATEGY`, `CHUNK_SIZE`, `CHUNK_OVERLAP`: 配置文档分块。
+*   **检索设置**:
+    *   `RETRIEVER_MODEL`: 用于嵌入的 Sentence Transformer 模型 (例如, "moka-ai/m3e-base")。
+    *   `USE_RERANKER`: 启用 Reranker (`true`/`false`, 默认: `true`)。
+    *   `RERANKER_MODEL`: Reranker 模型名称 (例如, "BAAI/bge-reranker-base", 在 `USE_RERANKER=true` 时使用)。
+    *   `RERANKER_DEVICE`: Reranker 设备 ('cpu', 'cuda', 'auto', 默认: 'auto')。
+    *   `RERANK_K`: 从 FAISS 初始检索并送入 reranker 的块数量 (默认: 2 * `RERANK_TOP_N` 或 10)。
+    *   `RERANK_TOP_N`: 重排序后最终返回的块数量 (默认: 与 `TOP_K` 相同)。
+    *   `TOP_K`: 如果 reranker 被禁用，则使用的默认块数量 (默认: 5)。
+*   **分块设置**:
+    *   `CHUNKING_STRATEGY`: (例如, 'recursive_character')。
+    *   `CHUNK_SIZE`, `CHUNK_OVERLAP`: 所选策略的参数。
 *   `DOCS_DIR`, `INDEX_DIR`: 指定数据目录。
 *   `LOG_LEVEL`: 设置日志详细程度。
 
-请参考 `.env.example` 文件（或之前的 README 版本）获取完整的变量列表。
+请参考 `.env.example` 文件获取完整的模板。
 
-**重要提示**: 确保所选的 LLM (`OLLAMA_MODEL`, `CUSTOM_API_MODEL`, `OPENAI_MODEL`) 能够遵循指令以生成 `RAGPipeline` 所需的结构化引用格式。较小的模型可能难以胜任。`gpt-4o-mini` 已成功测试。
+**重要提示**:
+*   确保所选的 LLM (`OLLAMA_MODEL`, `CUSTOM_API_MODEL`, `OPENAI_MODEL`) 能够遵循指令以生成 `RAGPipeline` 所需的结构化引用格式。
+*   如果 `USE_RERANKER=true`，请确保 `RERANKER_MODEL` 与 `sentence-transformers` 的 `CrossEncoder` 兼容。
 
 ## 功能特性
 
 *   **检索增强生成 (RAG):** 基于提供的文档回答问题。
-*   **结构化引用:** 生成带有内联引用 (`[0]`, `[1]`) 的答案，并为每个引用提供详细的来源信息（文档名称、原始文本引用、块 ID）。(**Sprint 2 完成**)
-*   **多轮对话历史:** 在 Streamlit UI 中记住对话的先前轮次，包括它们的引用。
-*   **FastAPI 后端:** 健壮的 API 接口，支持 SSE。
-*   **Streamlit 前端:** 交互式用户界面，用于聊天、查看引用、管理对话和上传文档。
-*   **基于块的语义搜索:** 可配置的分块策略 (`RecursiveCharacter`)，可插拔的嵌入模型 (HuggingFace, OpenAI, Ollama)，以及 FAISS 索引。( **Sprint 1 完成**)
-*   **可插拔的 LLM 后端:** 通过配置轻松在 Ollama、OpenAI 和自定义 OpenAI 兼容 API 之间切换。
-*   **流式 API:** 通过 Server-Sent Events 实现实时答案生成。
-*   **文档上传:** 通过 API 或 Streamlit UI 支持 `.txt`, `.md`, `.pdf`, `.docx` 文件上传。索引会自动更新。
-*   **GPU 支持:** 自动利用 GPU 进行嵌入和 FAISS（如果正确安装）。
+*   **结构化引用:** 生成带有内联引用 (`[0]`, `[1]`) 的答案，并提供详细的来源信息。
+*   **可选的重排序:** 使用 Cross-Encoder 模型（例如 bge-reranker）对初始检索结果进行重排序，以提高相关性。可通过 `.env` 配置。
+*   **Multi-Turn Conversation History:** Remembers previous turns in the conversation, including citations.
+*   **FastAPI Backend:** Robust API interface with SSE support.
+*   **Streamlit Frontend:** Interactive UI for chatting, viewing citations, managing conversations, and uploading documents.
+*   **Chunk-Based Semantic Search:** Configurable chunking, pluggable embedding models, and FAISS indexing.
+*   **Pluggable LLM Backends:** Easily switch between Ollama, OpenAI, and custom APIs.
+*   **Streaming API:** Real-time answer generation via Server-Sent Events.
+*   **Document Upload:** Supports `.txt`, `.md`, `.pdf`, `.docx` uploads with automatic index updates.
+*   **GPU Support:** Automatic GPU utilization for embeddings, FAISS, and reranking (if configured and available).
 
 ### 应用界面
 
@@ -303,7 +327,7 @@ my-rag-app/
 
 ## 使用方法
 
-1.  **准备文档:** 将源文档放入 `data/documents/`。
+1.  **准备文档:** 将源文档放入 `data/documents/`.
 2.  **配置后端:** 创建并编辑 `.env` 文件。
 3.  **运行 API 服务器:**
     ```bash
@@ -320,16 +344,11 @@ my-rag-app/
 
 ## 开发路线图
 
-*   **Sprint 0 (已完成):** 定义核心数据模型 (`ParsedDocument`, `Chunk`, `Citation`)、API 模式和策略接口。
-*   **Sprint 1 (已完成):** 实现分块集成 (`RecursiveCharacterChunkingStrategy`)，更新 `Retriever` 处理 `Chunk` 对象，临时调整流水线，临时的 API/UI 用于原始来源。
-*   **Sprint 2 (已完成):** 在 `RAGPipeline` 中实现结构化引用生成，更新 API 以返回带有 `citations` 的 `QueryResponse`，更新 Streamlit UI 以渲染结构化引用并处理历史记录。调试了 LLM 指令遵循和数据模型不一致问题。
-*   **Sprint 3 (下一步):** 使用 RAGAS 框架实现 RAG 评估基线。开发脚本并可能将基本评估指标集成到工作流中。
-*   **Sprint 4 (未来):**
-    *   高级 RAG 技术（例如 HyDE、句子窗口检索、父文档检索器）。
-    *   根据反馈优化 UI/UX。
-    *   抽象向量存储 (`BaseVectorStore`) 以便更容易地切换后端（例如 ChromaDB, Qdrant）。
-    *   增强的文档预处理和元数据提取。
-    *   更健壮的错误处理和日志记录。
-    *   异步处理改进。
+*   **Sprint 0 (已完成):** 定义核心数据模型、API 模式、策略接口。
+*   **Sprint 1 (已完成):** 实现分块集成，更新 `Retriever` 处理 `Chunk` 对象，临时 API/UI。
+*   **Sprint 2 (已完成):** 实现结构化引用生成，更新 API/UI 处理引用，调试 LLM/数据模型。
+*   **Reranker 集成 (已完成):** 向 `Retriever` 添加了可选的 Cross-Encoder 重排序功能。
+*   **Sprint 3 (下一步):** 使用 RAGAS 框架实现 RAG 评估基线。
+*   **Sprint 4 (未来):** 高级 RAG 技术、UI/UX 优化、抽象向量存储、增强的预处理、错误处理、异步改进。
 
 ---
