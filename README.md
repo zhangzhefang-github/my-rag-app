@@ -317,14 +317,14 @@ my-rag-app/
 *   **检索增强生成 (RAG):** 基于提供的文档回答问题。
 *   **结构化引用:** 生成带有内联引用 (`[0]`, `[1]`) 的答案，并提供详细的来源信息。
 *   **可选的重排序:** 使用 Cross-Encoder 模型（例如 bge-reranker）对初始检索结果进行重排序，以提高相关性。可通过 `.env` 配置。
-*   **Multi-Turn Conversation History:** Remembers previous turns in the conversation, including citations.
-*   **FastAPI Backend:** Robust API interface with SSE support.
-*   **Streamlit Frontend:** Interactive UI for chatting, viewing citations, managing conversations, and uploading documents.
-*   **Chunk-Based Semantic Search:** Configurable chunking, pluggable embedding models, and FAISS indexing.
-*   **Pluggable LLM Backends:** Easily switch between Ollama, OpenAI, and custom APIs.
-*   **Streaming API:** Real-time answer generation via Server-Sent Events.
-*   **Document Upload:** Supports `.txt`, `.md`, `.pdf`, `.docx` uploads with automatic index updates.
-*   **GPU Support:** Automatic GPU utilization for embeddings, FAISS, and reranking (if configured and available).
+*   **多轮对话历史:** 在 Streamlit UI 中记住对话的先前轮次，包括引用。
+*   **FastAPI 后端:** 提供健壮的 API 接口，支持服务器发送事件 (SSE)。
+*   **Streamlit 前端:** 提供交互式用户界面，用于聊天、查看引用、管理对话和上传文档。
+*   **基于块的语义搜索:** 支持可配置的分块策略、可插拔的嵌入模型和 FAISS 索引。
+*   **可插拔的 LLM 后端:** 通过配置轻松在 Ollama、OpenAI 和自定义 API 之间切换。
+*   **流式 API:** 通过服务器发送事件 (SSE) 实现实时答案生成。
+*   **文档上传:** 支持通过 API 或 Streamlit UI 上传 `.txt`, `.md`, `.pdf`, `.docx` 文件，并自动更新索引。
+*   **GPU 支持:** 自动利用 GPU 进行嵌入、FAISS 和重排序（如果已配置且可用）。
 
 ### 应用界面
 
