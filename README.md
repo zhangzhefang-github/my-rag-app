@@ -42,6 +42,10 @@ my-rag-app/
 │   │   ├── ollama_strategy.py   # Strategy for local Ollama models via LangChain
 │   │   ├── openai_strategy.py   # Strategy for OpenAI API via LangChain
 │   │   └── custom_api_strategy.py # Strategy for custom OpenAI-compatible APIs using the openai library
+│   ├── reranker_strategies/     # <<< NEW: Pluggable Reranker strategies
+│   │   ├── __init__.py          # Factory function (get_reranker)
+│   │   ├── base.py              # Abstract base class for Reranker strategies
+│   │   └── cross_encoder.py     # Strategy using SentenceTransformers CrossEncoder
 │   ├── chunking_strategies/     # Pluggable Chunking Strategies (RecursiveCharacter)
 │   │   ├── __init__.py          # Factory function (get_chunker)
 │   │   ├── base.py              # Abstract base class for Chunking strategies
@@ -218,6 +222,10 @@ my-rag-app/
 │   │   ├── ollama_strategy.py   # 通过 LangChain 与本地 Ollama 模型交互的策略
 │   │   ├── openai_strategy.py   # 通过 LangChain 调用 OpenAI API 的策略
 │   │   └── custom_api_strategy.py # 使用 openai 库调用自定义 OpenAI 兼容 API 的策略
+│   ├── reranker_strategies/     # <<< 新增: 可插拔的 Reranker 策略
+│   │   ├── __init__.py          # 工厂函数 (get_reranker)
+│   │   ├── base.py              # Reranker 策略的抽象基类
+│   │   └── cross_encoder.py     # 使用 SentenceTransformers CrossEncoder 的策略
 │   ├── chunking_strategies/     # 可插拔的分块策略 (RecursiveCharacter)
 │   │   ├── __init__.py          # Factory function (get_chunker)
 │   │   ├── base.py              # 分块策略的抽象基类

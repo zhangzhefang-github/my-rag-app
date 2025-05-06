@@ -17,7 +17,7 @@ from app.embedding_strategies.config import EmbeddingConfig
 from app.embedding_strategies.factory import get_embedder
 from app.embedding_strategies.base import EmbeddingStrategy
 from app.reranker_strategies.base import BaseRerankerStrategy
-from app.reranker_strategies.factory import get_reranker # Use factory for reranker
+from app.reranker_strategies import get_reranker # Import the factory function
 # Import chunking strategy and factory
 from app.chunking_strategies.base import BaseChunkingStrategy
 from app.chunking_strategies.factory import get_chunker
@@ -25,7 +25,7 @@ from app.chunking_strategies.factory import get_chunker
 from app.models.document import ParsedDocument, Chunk, ChunkMetadata, Citation # Added Citation for type hint consistency if needed later
 
 from typing import List, Dict, Any, Optional, Tuple
-from app.utils.env_helpers import _get_int_from_env
+from app.utils.env_helpers import _get_int_from_env, _get_bool_from_env
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,8 @@ class Retriever:
                  rerank_k: Optional[int] = None,
                  rerank_top_n: Optional[int] = None,
                  use_reranker: Optional[bool] = None,
-                 reranker_model: Optional[str] = None):
+                 reranker_model: Optional[str] = None,
+                 reranker_device: Optional[str] = None):
         """
         Initialize the Retriever.
         
@@ -53,6 +54,7 @@ class Retriever:
             rerank_top_n: Number of chunks to return after reranking. Reads from RERANK_TOP_N env var if None.
             use_reranker: Whether to use reranking. Reads from USE_RERANKER env var if None.
             reranker_model: Model name/path for the reranker. Reads from RERANKER_MODEL env var if None.
+            reranker_device: Device for the reranker. Reads from RERANKER_DEVICE env var if None.
         """
         # --- Initialize core attributes FIRST --- 
         self.embedding_config = embedding_config
@@ -72,14 +74,18 @@ class Retriever:
         logger.info(f"Initializing Retriever with config: embedding_provider={embedding_config.config.provider}, docs_dir='{docs_dir}', index_dir='{index_dir}', embedding_config={safe_config_dump}")
 
         # --- Get configuration from environment variables (or args) ---
-        self.top_k = top_k if top_k is not None else int(os.environ.get("TOP_K", "5"))
+        self.top_k = top_k if top_k is not None else _get_int_from_env("TOP_K", 5)
         # Read reranker config from args or env vars
-        _use_reranker_str = os.environ.get("USE_RERANKER", "true")
-        self.use_reranker = use_reranker if use_reranker is not None else (_use_reranker_str.lower() == 'true')
-        _reranker_model = reranker_model if reranker_model is not None else os.environ.get("RERANKER_MODEL")
-        # Note: Default for rerank_k now correctly depends on self.top_k being set
-        self.rerank_k = rerank_k if rerank_k is not None else int(os.environ.get("RERANK_K", str(self.top_k * 2)))
-        self.rerank_top_n = rerank_top_n if rerank_top_n is not None else int(os.environ.get("RERANK_TOP_N", str(self.top_k)))
+        self.use_reranker = use_reranker if use_reranker is not None else _get_bool_from_env("USE_RERANKER", True)
+        _reranker_model_name = reranker_model if reranker_model is not None else os.environ.get("RERANKER_MODEL", "BAAI/bge-reranker-base")
+        _reranker_device_name = reranker_device if reranker_device is not None else os.environ.get("RERANKER_DEVICE", "auto")
+
+        self.rerank_top_n = rerank_top_n if rerank_top_n is not None else _get_int_from_env("RERANK_TOP_N", self.top_k)
+        self.rerank_k = rerank_k if rerank_k is not None else _get_int_from_env("RERANK_K", max(self.rerank_top_n * 2, 10))
+
+        logger.info(f"Retriever config: top_k={self.top_k}, use_reranker={self.use_reranker}, "
+                    f"rerank_k={self.rerank_k}, rerank_top_n={self.rerank_top_n}, "
+                    f"reranker_model='{_reranker_model_name}', reranker_device='{_reranker_device_name}'")
         # --- End environment variable configuration ---
         
         # Get manager instances
