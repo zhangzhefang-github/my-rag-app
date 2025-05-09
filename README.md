@@ -1,5 +1,7 @@
 # RAG Demo - 检索增强生成系统
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 <div id="language-switcher">
   <em><a href="#english-section">English</a> | <a href="#chinese-section">中文</a></em>
 </div>
@@ -61,9 +63,10 @@ my-rag-app/
 ├── logs/                        # Log files directory
 ├── docs/                        # Documentation and images
 │   ├── images/
-│   │   └── rag_sequence_diagram.png
-│   │   └── ui_main.png
-│   │   └── ui_citations.png # <<< ADDED: Screenshot of citations
+│   │   └── app_main_interface.png   # Main application interface screenshot
+│   │   └── rag_sequence_diagram.png # System flow diagram
+│   │   └── ui_citations.png         # Chat UI with structured citations
+│   │   └── ui_main.png              # Example of system responding with citations
 │   └── ...
 ├── tests/                       # Unit and integration tests
 │   └── ...
@@ -146,10 +149,17 @@ Refer to the template within the `.env.example` file (or the previous README ver
 
 ### Application Interface
 
-Main chat UI with structured citations:
+An overview of the main application interface and key features:
 
-![Chat UI with Citations](docs/images/ui_citations.png)
-*(Note: Please add an updated screenshot named `ui_citations.png` to the `docs/images/` directory showing the citation expander and popover)*
+#### Main Application Interface
+![Main Application Interface](docs/images/app_main_interface.png)
+
+#### System Responding with Citations
+![System responding with citations after a user query](docs/images/ui_main.png)
+
+#### Chat UI with Structured Citations
+![Chat UI with Structured Citations](docs/images/ui_citations.png)
+*(Note: The `ui_citations.png` screenshot might need an update to better show the citation expander and popover details.)*
 
 ## Usage
 
@@ -160,12 +170,13 @@ Main chat UI with structured citations:
     conda activate rag-gpu
     uvicorn api:app --host 0.0.0.0 --port 8000 --reload
     ```
-    服务器将加载模型并构建/加载索引。上传的文档会触发索引更新。
+    The FastAPI backend automatically provides interactive API documentation (Swagger UI) at `/docs` and alternative documentation (ReDoc) at `/redoc` (e.g., `http://localhost:8000/docs` when running locally).
 4.  **Run the Streamlit UI:**
     ```bash
     conda activate rag-gpu
     streamlit run streamlit_app.py
     ```
+    FastAPI 后端会自动在 `/docs` 路径提供交互式 API 文档 (Swagger UI)，并在 `/redoc` 路径提供备选文档 (ReDoc) (例如，本地运行时访问 `http://localhost:8000/docs`)。
 5.  **Interact:** Open the Streamlit UI URL (e.g., `http://localhost:8501`) in your browser.
 
 ## Development Roadmap
@@ -187,7 +198,9 @@ Main chat UI with structured citations:
 
 <div id="chinese-section"></div>
 
-# RAG Demo - 检索增强生成系统
+# 智源对话 - RAG 驱动的智能问答系统
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## 概述
 
@@ -242,9 +255,10 @@ my-rag-app/
 ├── logs/                        # 日志文件目录
 ├── docs/                        # 文档和图片
 │   ├── images/
-│   │   └── rag_sequence_diagram.png
-│   │   └── ui_main.png
-│   │   └── ui_citations.png # <<< 新增: 引用界面截图
+│   │   └── app_main_interface.png   # 应用主界面截图
+│   │   └── rag_sequence_diagram.png # 系统流程图
+│   │   └── ui_citations.png         # 带结构化引用的聊天界面截图
+│   │   └── ui_main.png              # 系统带引用回答用户问题的示例截图
 │   └── ...
 ├── tests/                       # 单元和集成测试
 │   └── ...
@@ -317,23 +331,29 @@ my-rag-app/
 ## 功能特性
 
 *   **检索增强生成 (RAG):** 基于提供的文档回答问题。
-*   **结构化引用:** 生成带有内联引用 (`[0]`, `[1]`) 的答案，并提供详细的来源信息。
-*   **可选的重排序:** 使用 Cross-Encoder 模型（例如 bge-reranker）对初始检索结果进行重排序，以提高相关性。可通过 `.env` 配置。
-*   **多轮对话历史:** 在 Streamlit UI 中记住对话的先前轮次，包括引用。
-*   **FastAPI 后端:** 提供健壮的 API 接口，支持服务器发送事件 (SSE)。
-*   **Streamlit 前端:** 提供交互式用户界面，用于聊天、查看引用、管理对话和上传文档。
-*   **基于块的语义搜索:** 支持可配置的分块策略、可插拔的嵌入模型和 FAISS 索引。
-*   **可插拔的 LLM 后端:** 通过配置轻松在 Ollama、OpenAI 和自定义 API 之间切换。
+*   **结构化引用:** 生成带有内联引用 (`[0]`, `[1]`) 的答案，并为每个引用提供详细的来源信息（文档名称、原始文本引用、块ID）。(**Sprint 2 完成**)
+*   **可选的重排序 (Reranking):** 使用 Cross-Encoder 模型（例如 bge-reranker）对初始检索结果进行重排序，以提高相关性。可通过 `.env` 配置。
+*   **多轮对话历史:** 在 Streamlit UI 中记住对话的先前轮次，包括其引用。
+*   **FastAPI 后端:** 强大的 API 接口，支持 SSE。
+*   **Streamlit 前端:** 用于聊天、查看引用、管理对话和上传文档的交互式用户界面。
+*   **基于块的语义搜索:** 可配置的分块策略 (`RecursiveCharacter`)、可插拔的嵌入模型 (HuggingFace, OpenAI, Ollama) 和 FAISS 索引。(**Sprint 1 完成**)
+*   **可插拔的 LLM 后端:** 可轻松在 Ollama、OpenAI 和自定义 OpenAI 兼容 API 之间切换。
 *   **流式 API:** 通过服务器发送事件 (SSE) 实现实时答案生成。
-*   **文档上传:** 支持通过 API 或 Streamlit UI 上传 `.txt`, `.md`, `.pdf`, `.docx` 文件，并自动更新索引。
-*   **GPU 支持:** 自动利用 GPU 进行嵌入、FAISS 和重排序（如果已配置且可用）。
+*   **文档上传:** 支持通过 API 或 Streamlit UI 上传 `.txt`、`.md`、`.pdf`、`.docx` 文档。索引会自动更新。
+*   **GPU 支持:** 为嵌入、FAISS 和重排序自动利用 GPU（如果已配置且可用）。
 
 ### 应用界面
 
-带有结构化引用的主聊天界面：
+应用主要界面和关键功能概览：
 
-![带有引用的聊天界面](docs/images/ui_citations.png)
-*(注意: 请在 `docs/images/` 目录下添加一张名为 `ui_citations.png` 的更新截图，显示引用展开器和弹出框)*
+#### 应用主界面
+![应用主界面](docs/images/app_main_interface.png)
+
+#### 用户提问后系统给出带引用的回答
+![用户提问后系统给出带引用的回答](docs/images/ui_main.png)
+
+#### 包含结构化引用的聊天界面
+![包含结构化引用的聊天界面](docs/images/ui_citations.png)
 
 ## 使用方法
 
@@ -344,12 +364,13 @@ my-rag-app/
     conda activate rag-gpu
     uvicorn api:app --host 0.0.0.0 --port 8000 --reload
     ```
-    服务器将加载模型并构建/加载索引。上传的文档会触发索引更新。
+    The FastAPI backend automatically provides interactive API documentation (Swagger UI) at `/docs` and alternative documentation (ReDoc) at `/redoc` (e.g., `http://localhost:8000/docs` when running locally).
 4.  **运行 Streamlit UI:**
     ```bash
     conda activate rag-gpu
     streamlit run streamlit_app.py
     ```
+    FastAPI 后端会自动在 `/docs` 路径提供交互式 API 文档 (Swagger UI)，并在 `/redoc` 路径提供备选文档 (ReDoc) (例如，本地运行时访问 `http://localhost:8000/docs`)。
 5.  **交互:** 在浏览器中打开 Streamlit UI URL (例如, `http://localhost:8501`)。
 
 ## 开发路线图
