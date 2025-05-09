@@ -5,6 +5,8 @@ GPU资源管理器 - 统一管理GPU检测、内存分配和资源使用
 import torch
 import logging
 
+logger = logging.getLogger(__name__) # Initialize logger
+
 class GPUManager:
     _instance = None
     
@@ -83,6 +85,39 @@ class GPUManager:
         if not self.gpu_available or not self.gpu_info or 'devices' not in self.gpu_info:
             return []
         return [device['id'] for device in self.gpu_info['devices']]
+
+    def get_torch_device_for_model(self, requested_device: str = "auto") -> torch.device:
+        """
+        Determines the appropriate torch.device for loading a model.
+
+        Args:
+            requested_device: The desired device ("cuda", "cpu", "auto").
+
+        Returns:
+            A torch.device instance.
+        """
+        logger.debug(f"Determining torch device. Requested: '{requested_device}', GPU available: {self.gpu_available}")
+        if requested_device == "cuda":
+            if self.gpu_available:
+                logger.info("Requested CUDA and GPU is available. Using CUDA.")
+                return torch.device("cuda")
+            else:
+                logger.warning("Requested CUDA, but GPU is not available. Falling back to CPU.")
+                return torch.device("cpu")
+        elif requested_device == "cpu":
+            logger.info("Requested CPU. Using CPU.")
+            return torch.device("cpu")
+        elif requested_device == "auto":
+            if self.gpu_available:
+                # You might add more sophisticated logic here, e.g., checking VRAM
+                logger.info("Requested AUTO and GPU is available. Using CUDA.")
+                return torch.device("cuda")
+            else:
+                logger.info("Requested AUTO and GPU is not available. Using CPU.")
+                return torch.device("cpu")
+        else:
+            logger.warning(f"Invalid requested_device: '{requested_device}'. Defaulting to CPU.")
+            return torch.device("cpu")
 
     def __str__(self):
         if not self.gpu_available:

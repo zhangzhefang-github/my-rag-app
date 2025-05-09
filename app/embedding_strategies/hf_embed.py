@@ -115,3 +115,45 @@ class HFEmbedder(EmbeddingStrategy):
         # SentenceTransformer encoding can be CPU/GPU intensive.
         # Running it in a thread pool executor prevents blocking the main async loop.
         return await self._run_sync_in_async(texts) 
+
+    def get_embedding_dimension(self) -> int:
+        """Returns the embedding dimension of the loaded model."""
+        if self.model:
+            try:
+                # For SentenceTransformer models, this is the standard way
+                dim = self.model.get_sentence_embedding_dimension()
+                if dim is not None:
+                    # logger.info(f"Reported embedding dimension: {dim} for model {self.model_path}")
+                    return dim
+                
+                # Fallback for some other types of Hugging Face models if the above doesn't work
+                # (though SentenceTransformer should have the above method)
+                if hasattr(self.model, 'config') and hasattr(self.model.config, 'hidden_size'):
+                    dim = self.model.config.hidden_size
+                    # logger.info(f"Reported embedding dimension from config.hidden_size: {dim} for model {self.model_path}")
+                    return dim
+
+                # Fallback for SentenceTransformer models where the embedding layer is the first module (e.g. model[0])
+                # and it's a Transformer model. model[0].auto_model.config.hidden_size
+                if isinstance(self.model, torch.nn.Module) and hasattr(self.model, '0') and \
+                   hasattr(self.model[0], 'auto_model') and \
+                   hasattr(self.model[0].auto_model, 'config') and \
+                   hasattr(self.model[0].auto_model.config, 'hidden_size'):
+                    dim = self.model[0].auto_model.config.hidden_size
+                    # logger.info(f"Reported embedding dimension from model[0].auto_model.config.hidden_size: {dim} for model {self.model_path}")
+                    return dim
+
+                logger.warning(f"Could not reliably determine embedding dimension for model '{self.model_path}'.")
+                # You might want to raise an error or return a default/sentinel value
+                # For moka-ai/m3e-base, the dimension is 768. If all else fails, and you know it,
+                # you could hardcode it here, but it's preferable to get it from the model.
+                # if self.model_path == "moka-ai/m3e-base": return 768
+                return 0 # Or raise ValueError("Dimension not found")
+            except Exception as e:
+                logger.error(f"Error getting embedding dimension for '{self.model_path}': {e}", exc_info=True)
+                # Depending on desired strictness, either raise or return a default
+                raise ValueError(f"Could not get embedding dimension for '{self.model_path}': {e}") from e
+        else:
+            logger.error(f"Model '{self.model_path}' not loaded, cannot determine embedding dimension.")
+            # raise RuntimeError(f"Model '{self.model_path}' not loaded.")
+            return 0 # Or raise an error 

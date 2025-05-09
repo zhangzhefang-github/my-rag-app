@@ -13,6 +13,7 @@
 A simple Retrieval Augmented Generation (RAG) system built with FastAPI and Streamlit. It combines efficient semantic retrieval using Sentence Transformers and FAISS, **optional reranking** using Cross-Encoders, with pluggable Large Language Model (LLM) backends for answering questions based on your documents, featuring structured citations and multi-turn conversation history.
 
 **Current Status (Sprint 2 + Reranker):** Chunk-based retrieval with structured citations and **optional reranking** is implemented. The system chunks documents, indexes chunks, retrieves relevant chunks (with optional reranking), formats context for the LLM, and generates an answer with inline `[index]` markers and a separate list of `Citation` objects. The Streamlit UI correctly displays these citations and maintains conversation history.
+**Recent Debugging & Optimizations:** The system has recently undergone extensive debugging and optimization focusing on the RAG retrieval pipeline, embedding layer, reranker functionality, and Streamlit frontend error handling and user experience.
 
 ## Project Structure
 
@@ -123,7 +124,7 @@ Create a `.env` file in the project root (`my-rag-app/`) to configure the applic
     *   `CHUNKING_STRATEGY`: (e.g., 'recursive_character').
     *   `CHUNK_SIZE`, `CHUNK_OVERLAP`: Parameters for the chosen strategy.
 *   `DOCS_DIR`, `INDEX_DIR`: Specify data directories.
-*   `LOG_LEVEL`: Set logging verbosity.
+*   `LOG_LEVEL`: Set logging verbosity. **Recommended to set to `DEBUG` during development for detailed execution tracing.**
 
 Refer to the template within the `.env.example` file (or the previous README version) for the full list of variables.
 
@@ -193,6 +194,7 @@ Main chat UI with structured citations:
 一个基于 FastAPI 和 Streamlit 构建的简单检索增强生成 (RAG) 系统。它结合了使用 Sentence Transformers 和 FAISS 实现的高效语义检索、使用 Cross-Encoders 的**可选重排序 (reranking)**，以及可插拔的大语言模型 (LLM) 后端，用于根据您的文档回答问题，并提供结构化引用和多轮对话历史记录。
 
 **当前状态 (Sprint 2 + Reranker):** 已实现基于块的检索、结构化引用以及**可选的重排序**。系统对文档进行分块，索引块，检索相关块（可选择进行重排序），为 LLM 格式化上下文，并生成带有内联 `[索引]` 标记和独立 `Citation` 对象列表的答案。Streamlit UI 能正确显示这些引用，并维护对话历史。
+**近期调试与优化:** 系统近期针对RAG检索流程、嵌入层、重排序器功能以及Streamlit前端的错误处理和用户体验进行了深度的调试与优化。
 
 ## 项目结构
 
@@ -304,7 +306,7 @@ my-rag-app/
     *   `CHUNKING_STRATEGY`: (例如, 'recursive_character')。
     *   `CHUNK_SIZE`, `CHUNK_OVERLAP`: 所选策略的参数。
 *   `DOCS_DIR`, `INDEX_DIR`: 指定数据目录。
-*   `LOG_LEVEL`: 设置日志详细程度。
+*   `LOG_LEVEL`: 设置日志详细程度。**建议在开发过程中将其设置为 `DEBUG` 以便追踪详细的程序执行流程。**
 
 请参考 `.env.example` 文件获取完整的模板。
 

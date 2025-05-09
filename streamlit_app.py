@@ -187,590 +187,400 @@ for message in st.session_state.messages:
             #          st.json(message["sources"])
             # --- End Sprint 1 Removal ---
 
-# Get user input
-# user_query = st.chat_input("向 智源对话 提问...") # <-- REMOVE THIS
+# --- User Input Area ---
 
-# if user_query: # <-- REMOVE THIS BLOCK
-    # logger.info(f"User query: '{user_query}'")
-    # # Add user message to chat history and display it
-    # st.session_state.messages.append({"role": "user", "content": user_query})
-    # with st.chat_message("user"):
-    #     st.markdown(user_query)
-    #
-    # # Prepare API request data
-    # request_data = {
-    #     "query": user_query,
-    #     "stream": True,
-    #     "top_k": None
-    # }
-    #
-    # # Display assistant response placeholder
-    # with st.chat_message("assistant"):
-    #     message_placeholder = st.empty()
-    #     full_response = ""
-    #     st.session_state.current_sources = None # Reset sources for the new query
-    #     sources_container = st.expander("查看来源 (原始数据)", expanded=False) # Pre-create expander
-    #     sources_placeholder = sources_container.empty() # Placeholder within expander
-    #
-    #     try:
-    #         if True:
-    #             logger.debug(f"Sending streaming request to {get_api_url('/query')}")
-    #             stream_response = requests.post(get_api_url('/query'), json=request_data, stream=True)
-    #             stream_response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
-    #
-    #             # Process Server-Sent Events (SSE)
-    #             for line in stream_response.iter_lines(decode_unicode=True):
-    #                 if line.startswith("data:"):
-    #                     try:
-    #                         message_data = json.loads(line[len("data:"):])
-    #                         message_type = message_data.get("type")
-    #                         data_content = message_data.get("data")
-    #
-    #                         #logger.debug(f"Received stream data: type='{message_type}', data='{str(data_content)[:100]}...'")
-    #
-    #                         if message_type == "chunk": # Assuming LLM token chunks
-    #                             full_response += data_content
-    #                             message_placeholder.markdown(full_response + "▌")
-    #                         elif message_type == "final_answer": # Handle case where pipeline sends a single final answer
-    #                             full_response = data_content
-    #                             message_placeholder.markdown(full_response)
-    #                         elif message_type == "sources":
-    #                             # **SPRINT 1**: Store the raw sources list
-    #                             st.session_state.current_sources = data_content
-    #                             sources_placeholder.json(st.session_state.current_sources)
-    #                             logger.info(f"Received sources data (count: {len(data_content) if isinstance(data_content, list) else 'N/A'})")
-    #                         elif message_type == "error":
-    #                             full_response += f"\n\n**Error:** {data_content}"
-    #                             message_placeholder.error(full_response)
-    #                             logger.error(f"Stream reported error: {data_content}")
-    #                         elif message_type == "debug":
-    #                             logger.debug(f"Debug info from stream: {data_content}")
-    #                             # Optionally display debug info in a separate area
-    #                         # Add handling for other types like 'status' if needed
-    #
-    #                     except json.JSONDecodeError:
-    #                         logger.warning(f"Received non-JSON data line: {line}")
-    #                     except Exception as stream_parse_e:
-    #                          logger.error(f"Error parsing stream message '{line}': {stream_parse_e}", exc_info=True)
-    #                          full_response += "\n\n*(Error parsing stream data)*"
-    #                          message_placeholder.warning(full_response)
-    #
-    #             message_placeholder.markdown(full_response) # Final update without cursor
-    #             logger.info("Streaming response processing complete.")
-    #
-    #         else: # Non-streaming request
-    #             logger.debug(f"Sending non-streaming request to {get_api_url('/query')}")
-    #             response = requests.post(get_api_url('/query'), json=request_data)
-    #             response.raise_for_status()
-    #             result = response.json()
-    #
-    #             # **SPRINT 1**: Expecting {"answer": ..., "sources": [raw_chunks...]}
-    #             full_response = result.get("answer", "*No answer received*")
-    #             st.session_state.current_sources = result.get("sources", []) # Get raw sources
-    #             debug_info = result.get("debug_info")
-    #
-    #             message_placeholder.markdown(full_response)
-    #             if st.session_state.current_sources:
-    #                 sources_placeholder.json(st.session_state.current_sources)
-    #             if debug_info:
-    #                  logger.info(f"Non-streaming debug info: {debug_info}")
-    #                  # st.sidebar.json(debug_info) # Optionally display debug info
-    #             logger.info("Non-streaming response received and processed.")
-    #
-    #     except requests.exceptions.RequestException as e:
-    #         logger.error(f"API request failed: {e}", exc_info=True)
-    #         message_placeholder.error(f"Error communicating with backend: {e}")
-    #     except Exception as e:
-    #          logger.error(f"An unexpected error occurred in Streamlit app: {e}", exc_info=True)
-    #          message_placeholder.error(f"An unexpected error occurred: {e}")
-    #
-    # # Add assistant response (and sources) to chat history
-    # assistant_message = {
-    #     "role": "assistant",
-    #     "content": full_response,
-    #     "sources": st.session_state.current_sources # Add sources here
-    # }
-    # st.session_state.messages.append(assistant_message)
+# Using st.chat_input as per Streamlit 1.45.0 documentation provided by the user.
+# It can return None, a string (if accept_file=False), or a dict-like object
+# with .text and .files attributes.
+prompt = st.chat_input(
+    "Say something and/or attach an image",
+    accept_file=True,  # Allows file uploads
+    file_type=["jpg", "jpeg", "png"], # Specifies allowed file types
+)
 
-# Optional: Clear history button
-st.sidebar.button("Clear Chat History", on_click=lambda: st.session_state.update(messages=[], current_sources=None))
+if prompt:
+    user_text = ""
+    uploaded_files = []
 
-# --- Sidebar --- 
-st.sidebar.title("导航与设置")
-
-# --- New Chat Button ---
-if st.sidebar.button("➕ 新建对话", use_container_width=True):
-    st.session_state.current_conversation_id = None
-    st.session_state.messages = [] # Clear messages for new chat
-    st.rerun() # Rerun the app to reflect the change
-
-st.sidebar.markdown("## 对话历史")
-
-# --- Conversation List --- 
-conversations = st.session_state.conversation_list
-
-# Sort conversations by updated_at timestamp (most recent first)
-# Assuming backend provides 'created_at' or 'updated_at'
-if conversations:
-    try:
-        conversations = sorted(
-            conversations,
-            # Use updated_at if available, otherwise created_at, fallback to empty string
-            key=lambda x: x.get("updated_at", x.get("created_at", "")) or "",
-            reverse=True
-        )
-        st.session_state.conversation_list = conversations # Update sorted list in state
-    except Exception as e:
-        # Handle potential sorting errors (e.g., missing keys)
-        st.sidebar.warning(f"无法排序对话列表: {e}")
-
-# Display conversation buttons
-for i, conv in enumerate(conversations):
-    conv_id = conv.get("id")
-    conv_title = conv.get("title", "Untitled")
+    # prompt is a dict-like object here because accept_file is True
+    # Access .text and .files attributes
+    if hasattr(prompt, 'text'):
+        user_text = prompt.text if prompt.text is not None else ""
     
-    col1, col2 = st.sidebar.columns([0.85, 0.15]) 
-    
-    is_selected = (st.session_state.current_conversation_id == conv_id)
+    if hasattr(prompt, 'files'):
+        uploaded_files = prompt.files if prompt.files is not None else []
 
-    # --- Start: Remove background styling and Re-add prefix ---
-    # Remove wrapper div logic
-    # if is_selected:
-    #    st.sidebar.markdown('<div class="selected-conversation-col">', unsafe_allow_html=True)
-    
-    # Column 1: Conversation Title Button
-    with col1:
-        # Re-add blue dot prefix logic
-        prefix = "🔵 " if is_selected else ""
-        display_title = f"{prefix}{conv_title}" # Add prefix back
+    logger.info(f"User submitted: text='{user_text}', files_count={len(uploaded_files)}")
+
+    # Proceed if there's either text or at least one file
+    if user_text or uploaded_files:
+        query_for_backend = user_text # Use the text part for the backend query for now
+
+        # --- Start: Original Input Handling Logic (adapted) ---
+        current_cid = st.session_state.get("current_conversation_id")
         
-        # Use the display_title. Button has no type.
-        if st.button(display_title, key=f"conv_{conv_id}", use_container_width=True):
-            if not is_selected:
-                st.session_state.current_conversation_id = conv_id
-                st.session_state.messages = get_messages(conv_id)
-                st.session_state.pending_delete_id = None 
-                st.rerun()
-
-    # Remove closing wrapper div logic
-    # if is_selected:
-    #    st.sidebar.markdown('</div>', unsafe_allow_html=True)
-    # --- End: Remove background styling and Re-add prefix ---
-
-    # Column 2: Delete Button
-    with col2:
-        if st.session_state.pending_delete_id != conv_id:
-           if st.button("🗑️", key=f"del_{conv_id}", help=f"删除对话: {conv_title}", use_container_width=True):
-                st.session_state.pending_delete_id = conv_id
-                st.rerun() 
-
-    # --- Confirmation Controls (Displayed below the item if pending) ---
-    if st.session_state.pending_delete_id == conv_id:
-        st.sidebar.warning(f"确认删除 \'{conv_title}\'?")
-        confirm_col1, confirm_col2 = st.sidebar.columns(2)
-        with confirm_col1:
-            if st.button("确认", key=f"confirm_del_{conv_id}", use_container_width=True):
-                success = delete_conversation(conv_id)
-                if success:
-                    st.success(f"对话 \'{conv_title}\' 已删除。")
-                    # Update state
-                    st.session_state.conversation_list = [c for c in st.session_state.conversation_list if c.get("id") != conv_id]
-                    if st.session_state.current_conversation_id == conv_id:
-                        st.session_state.current_conversation_id = None
-                        st.session_state.messages = []
-                    st.session_state.pending_delete_id = None
-                    st.rerun() 
+        if current_cid is None:
+            st.info("创建新对话中...")
+            new_conv_title = f"对话: {user_text[:20]}..." if user_text else "新对话"
+            if uploaded_files:
+                new_conv_title += f" (含 {len(uploaded_files)} 个附件)"
+            
+            new_conv = create_conversation(title=new_conv_title)
+            if new_conv and new_conv.get("id"):
+                current_cid = new_conv["id"]
+                st.session_state.current_conversation_id = current_cid
+                if "conversation_list" in st.session_state:
+                    st.session_state.conversation_list.insert(0, new_conv) 
                 else:
-                    # Error message shown by delete_conversation
-                    st.session_state.pending_delete_id = None
-                    st.rerun()
-        with confirm_col2:
-            if st.button("取消", key=f"cancel_del_{conv_id}", use_container_width=True):
-                st.session_state.pending_delete_id = None
+                    st.session_state.conversation_list = [new_conv]
+                st.success(f"新对话已创建: {new_conv.get('title')}")
+            else:
+                st.error("无法创建新对话，请检查后端连接。")
+                st.stop() # Stop if conversation creation fails
+        
+        # Construct user message content for display
+        user_message_display_content = user_text
+        if uploaded_files:
+            if user_text: # Add a separator if there's also text
+                user_message_display_content += f"\\n\\n--- (附带 {len(uploaded_files)} 个文件) ---"
+            else: # Only files were uploaded
+                user_message_display_content = f"(用户上传了 {len(uploaded_files)} 个文件)"
+
+        st.session_state.messages.append({"role": "user", "content": user_message_display_content})
+        with st.chat_message("user"):
+            # Display text first, then images
+            if user_text:
+                st.markdown(user_text) # Display the original text part
+            
+            if uploaded_files:
+                if not user_text: # If only files, print the placeholder message
+                    st.markdown(user_message_display_content)
+                for idx, uploaded_file_item in enumerate(uploaded_files):
+                    try:
+                        # Display the image using st.image
+                        st.image(uploaded_file_item, caption=f"附件 {idx + 1}: {uploaded_file_item.name}", width=250)
+                    except Exception as img_e:
+                        st.warning(f"无法显示附件 {idx + 1} ({uploaded_file_item.name}): {img_e}")
+        
+        # --- Backend call logic (if there's text or a policy to process files) ---
+        # For now, backend is called primarily if there's text.
+        # If only files are uploaded, we've shown them. The RAG backend might not act on file-only submissions
+        # unless specifically designed for it.
+        
+        if query_for_backend or (uploaded_files and not query_for_backend): # Proceed if text OR only files (to show assistant ack for files)
+            with st.chat_message("assistant"):
+                status_placeholder = st.empty()
+                answer_placeholder = st.empty()
+                citations_placeholder = st.empty()
+                time_info_placeholder = st.empty()
+
+                full_answer = ""
+                st.session_state.current_citations = [] # Reset citations
+                error_occurred = False
+                start_time = time.time()
+                first_token_time = None
+                token_count = 0
+                start_datetime = datetime.now().strftime("%H:%M:%S")
+
+                try:
+                    # If only files were uploaded and no text, assistant can just acknowledge.
+                    if not query_for_backend and uploaded_files:
+                        with st.chat_message("assistant"):
+                            ack_message = f"已收到您上传的 {len(uploaded_files)} 个文件。"
+                            st.markdown(ack_message)
+                        st.session_state.messages.append({"role": "assistant", "content": ack_message, "citations": []})
+                        # No further backend call needed for simple acknowledgment of file upload without text.
+                    
+                    elif query_for_backend: # If there is text, call the backend
+                        with status_placeholder.status("Assistant is thinking...", expanded=False) as status:
+                            logger.info(f"向对话 {current_cid[:8]} 发送消息: '{query_for_backend}'")
+                            
+                            message_payload = {
+                                "conversation_id": current_cid,
+                                "content": query_for_backend, 
+                                "role": "user"
+                            } 
+                            message_stream_url = get_api_url(f'/conversations/{current_cid}/messages') 
+                            headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
+                            
+                            with requests.post(message_stream_url, json=message_payload, headers=headers, stream=True, timeout=180) as response:
+                                response.raise_for_status()
+                                status.update(label="接收回复...", state="running")
+                                
+                                current_event_type = None
+                                for line in response.iter_lines(decode_unicode=True):
+                                    if line.startswith('event:'):
+                                        current_event_type = line.split('event:', 1)[1].strip()
+                                        continue
+                                    elif line.startswith('data:'):
+                                        data_str = line.split('data:', 1)[1].strip()
+                                        if not data_str: continue
+                                        
+                                        event_to_process = current_event_type if current_event_type else 'chunk'
+                                        try:
+                                            data = json.loads(data_str)
+                                            if event_to_process == 'citations':
+                                                extracted_citations = data.get('data', data.get('citations'))
+                                                if isinstance(extracted_citations, list):
+                                                    st.session_state.current_citations = extracted_citations
+                                                elif isinstance(data, list):
+                                                    st.session_state.current_citations = data
+                                                else:
+                                                    logger.warning(f"Citations event: failed to extract list from {data}")
+                                            elif event_to_process == 'error':
+                                                detail = data.get('detail', data.get('data', '未知流错误'))
+                                                answer_placeholder.error(f"流处理错误: {detail}")
+                                                logger.error(f"SSE Error Event: {detail}")
+                                                error_occurred = True
+                                                status.update(label="流处理出错", state="error", expanded=True)
+                                            elif event_to_process == 'end':
+                                                logger.info(f"SSE End Event received with data: {data}")
+                                                status.update(label="流处理完成.", state="complete", expanded=False)
+                                                break
+                                            elif event_to_process == 'chunk':
+                                                token = data.get("token", data.get("data"))
+                                                if token:
+                                                    token_count += 1
+                                                    if first_token_time is None: first_token_time = time.time()
+                                                    full_answer += token
+                                                    answer_placeholder.markdown(full_answer + "▌")
+                                                else:
+                                                    logger.warning(f"Chunk/data event, but no token/data: {data}")
+                                            elif event_to_process == 'debug':
+                                                logger.debug(f"Debug info from stream: {data.get('data', data)}")
+                                            else:
+                                                logger.warning(f"Received unhandled SSE event '{event_to_process}' with data: {data}")
+                                        except json.JSONDecodeError as e:
+                                            if event_to_process == 'chunk': 
+                                                token = data_str
+                                                token_count += 1
+                                                if first_token_time is None: first_token_time = time.time()
+                                                full_answer += token
+                                                answer_placeholder.markdown(full_answer + "▌")
+                                            else:
+                                                logger.warning(f"Could not parse JSON for event '{event_to_process}': {line}. Error: {e}")
+                                        except Exception as parse_e:
+                                            logger.error(f"Error processing SSE data line: {line}. Error: {parse_e}", exc_info=True)
+                                    elif line.strip() == "":
+                                        current_event_type = None
+                                    else:
+                                        logger.warning(f"Received non-SSE formatted line (ignoring): {line}")
+                        
+                        end_time = time.time()
+                        total_elapsed = end_time - start_time
+                        tokens_per_second = token_count / total_elapsed if total_elapsed > 0 and token_count > 0 else 0
+                        first_token_latency = (first_token_time - start_time) if first_token_time else total_elapsed
+                        
+                        time_info_text = (
+                            f"⏱️ 总耗时: {total_elapsed:.2f}秒 | 首token: {first_token_latency:.2f}秒 | "
+                            f"速度: {tokens_per_second:.1f} t/s ({token_count} t) | 开始于: {start_datetime}"
+                        ) if first_token_time else f"⏱️ 总耗时: {total_elapsed:.2f}秒 (无答案 token)"
+
+                        if st.session_state.current_citations and not error_occurred:
+                            with citations_placeholder.expander("查看引用", expanded=True):
+                                for i, citation in enumerate(st.session_state.current_citations):
+                                    details = citation.get('source_details', [{}])[0]
+                                    doc_name = details.get('doc_source_name', '未知来源')
+                                    text_quote = citation.get('text_quote', '...')
+                                    chunk_id = details.get('chunk_id', 'N/A')
+                                    chunk_text = details.get('chunk_text', '无内容')
+                                    st.markdown(f"**[{i+1}] 引用自:** {doc_name}")
+                                    st.markdown(f"> {text_quote}")
+                                    with st.popover("查看完整来源块", use_container_width=True):
+                                        st.markdown(f"##### 来源: {doc_name} (块 ID: {chunk_id})")
+                                        st.markdown(f"```\\n{chunk_text}\\n```")
+                                    st.markdown("---")
+                        
+                        if not error_occurred:
+                            if full_answer:
+                                answer_placeholder.markdown(full_answer) # Final answer display
+                                time_info_placeholder.caption(time_info_text)
+                                st.session_state.messages.append({
+                                    "role": "assistant", "content": full_answer,
+                                    "citations": st.session_state.current_citations, "response_time": time_info_text 
+                                })
+                                st.session_state.conversation_list = get_conversations() # Refresh conv list
+                            elif st.session_state.current_citations: # Only citations, no text answer
+                                answer_placeholder.info("已找到相关引用信息。")
+                                time_info_placeholder.caption(time_info_text)
+                                st.session_state.messages.append({
+                                    "role": "assistant", "content": "", "citations": st.session_state.current_citations,
+                                    "response_time": time_info_text 
+                                })
+                                st.session_state.conversation_list = get_conversations()
+                            else: # No answer, no citations
+                                answer_placeholder.warning("收到空回复。")
+                                time_info_placeholder.caption(time_info_text)
+                                st.session_state.messages.append({
+                                    "role": "assistant", "content": "", "citations": [], "response_time": time_info_text 
+                                })
+                        status_placeholder.empty()
+
+                except requests.exceptions.HTTPError as e:
+                    with st.chat_message("assistant"):
+                        error_msg = f"API 错误 (状态 {e.response.status_code}): {e.response.text[:300]}"
+                        st.error(error_msg)
+                    logger.error(f"{error_msg} from URL: {e.request.url}", exc_info=True)
+                    st.session_state.messages.append({"role": "assistant", "content": f"错误: {error_msg}"})
+                except requests.exceptions.RequestException as e:
+                    with st.chat_message("assistant"):
+                        error_msg = f"连接错误: 无法连接到 API ({message_stream_url}). 详情: {e}"
+                        st.error(error_msg)
+                    logger.error(error_msg, exc_info=True)
+                    st.session_state.messages.append({"role": "assistant", "content": f"错误: {error_msg}"})
+                except Exception as e: # General exception
+                    with st.chat_message("assistant"):
+                        error_msg = f"发生意外错误: {e}"
+                        st.error(error_msg)
+                    logger.error(error_msg, exc_info=True)
+                    st.session_state.messages.append({"role": "assistant", "content": f"错误: {error_msg}"})
+                finally:
+                    logger.debug("Input processing block finished.")
+                    # Ensure correct indentation for the conditional rerun logic below.
+                    if uploaded_files and not query_for_backend: # If only files were processed (assistant ack)
+                        st.rerun() # Ensure UI updates after assistant ack for files.
+                    elif query_for_backend: # If text was processed (API call made)
+                        # Let Streamlit's default rerun on session_state.messages change handle it.
+                        pass # pass is sufficient if no explicit action is needed here.
+
+# Sidebar for conversation management
+with st.sidebar:
+    st.header("对话管理")
+
+    # Button to create a new conversation
+    if st.button("➕ 新建对话", use_container_width=True):
+        st.session_state.messages = []
+        st.session_state.current_conversation_id = None
+        st.session_state.current_sources = None
+        st.session_state.current_citations = []
+        # Optionally, immediately create on backend or wait for first message:
+        # For simplicity, let's clear current_cid and a new one will be made on first message.
+        logger.info("New conversation started by user button.")
+        st.rerun() # Rerun to clear main chat area and reflect new state
+
+    st.markdown("---")
+    st.subheader("历史对话")
+
+    # Fetch and display list of conversations
+    # Ensure conversation_list is initialized in session state
+    if 'conversation_list' not in st.session_state:
+        st.session_state.conversation_list = [] # Initialize if not present
+    
+    # Attempt to load conversations if the list is empty or forced refresh
+    # This might be called frequently, consider if get_conversations() is expensive
+    # For now, assume it's acceptable or has its own caching/efficiency.
+    if not st.session_state.conversation_list: # Load if empty
+        st.session_state.conversation_list = get_conversations()
+        if not st.session_state.conversation_list:
+            st.caption("暂无历史对话。")
+        # No rerun here, display will happen naturally
+
+    if st.session_state.conversation_list:
+        # Create a list of conversation titles for display, handling potential None or missing titles
+        conv_options = {}
+        for conv_data in st.session_state.conversation_list:
+            conv_id = conv_data.get("id")
+            conv_title = conv_data.get("title", f"对话 {conv_id[:8]}...") if conv_id else "未知对话"
+            if conv_id:
+                conv_options[conv_id] = conv_title
+
+        # Use a selectbox or radio buttons for switching conversations
+        # For a large number of conversations, a selectbox is better.
+        # Let's use buttons for now as it's common in chat UIs.
+        
+        selected_conv_id_sidebar = None
+        current_conv_id_main_area = st.session_state.get("current_conversation_id")
+
+        for conv_id_iter, conv_title_iter in conv_options.items():
+            # Highlight the selected conversation
+            button_type = "primary" if conv_id_iter == current_conv_id_main_area else "secondary"
+            if st.button(f"{conv_title_iter}", key=f"conv_btn_{conv_id_iter}", use_container_width=True, type=button_type):
+                selected_conv_id_sidebar = conv_id_iter
+        
+        if selected_conv_id_sidebar and selected_conv_id_sidebar != current_conv_id_main_area:
+            logger.info(f"User selected conversation ID: {selected_conv_id_sidebar}")
+            st.session_state.current_conversation_id = selected_conv_id_sidebar
+            # Fetch messages for the selected conversation
+            try:
+                conv_messages_url = get_api_url(f'/conversations/{selected_conv_id_sidebar}/messages')
+                response = requests.get(conv_messages_url, timeout=10)
+                response.raise_for_status()
+                messages_data = response.json()
+                
+                # Backend returns {"messages": [...]} where each message is {"id", "conversation_id", "role", "content", "created_at", "updated_at"}
+                # We need to transform this to the format expected by st.session_state.messages: {"role": ..., "content": ...}
+                # And potentially handle citations if they are stored with messages on backend.
+                
+                formatted_messages = []
+                raw_messages_from_api = messages_data.get("messages", [])
+                for msg in raw_messages_from_api:
+                    formatted_msg = {"role": msg.get("role"), "content": msg.get("content")}
+                    # If backend stores citations with messages, extract them here.
+                    # For now, assuming basic structure.
+                    # if msg.get("citations"):
+                    #    formatted_msg["citations"] = msg.get("citations") 
+                    formatted_messages.append(formatted_msg)
+                
+                st.session_state.messages = formatted_messages
+                st.session_state.current_sources = None # Clear previous sources/citations
+                st.session_state.current_citations = []
+                logger.info(f"Loaded {len(st.session_state.messages)} messages for conversation {selected_conv_id_sidebar}")
                 st.rerun()
+            except requests.exceptions.RequestException as e:
+                st.error(f"加载对话失败: {e}")
+                logger.error(f"Failed to load messages for conv {selected_conv_id_sidebar}: {e}", exc_info=True)
+            except json.JSONDecodeError as e:
+                st.error("加载对话时收到无效响应。")
+                logger.error(f"Failed to parse messages for conv {selected_conv_id_sidebar}. Status: {response.status_code if 'response' in locals() else 'N/A'}. Error: {e}")
 
-st.sidebar.markdown("--- ") # Separator before settings
+    else:
+        st.caption("无历史对话或无法加载。")
 
-# --- Remove File Uploader from Sidebar ---
-# st.sidebar.markdown("## 知识库管理") 
-# with st.sidebar.expander("管理知识库文档", expanded=False): 
-#    ...
-
-st.sidebar.caption("当前设置：")
-st.sidebar.write(f"- API Host: {API_BASE_URL}")
-
-# --- Main Page --- 
-# REMOVED: Duplicate chat history rendering loop
-# # --- Display Chat History ---
-# # Make sure current_conversation_id is valid before trying to display
-# if st.session_state.current_conversation_id and st.session_state.messages:
-#     for message in st.session_state.messages:
-#         role = message.get("role", "unknown") # Use .get for safety
-#         content = message.get("content", "") # Use .get for safety
-#         with st.chat_message(role):
-#             if role == "user":
-#                 st.markdown(content)
-#             elif role == "assistant":
-#                 # Parse the historical assistant message content before displaying
-#                 think_content, answer_content = parse_llm_output_frontend(content)
-#                 st.markdown(answer_content) # Display the cleaned content
-#                 # Optionally, display saved statistics if available
-#                 # response_time_info = message.get("response_time", "")
-#                 # if response_time_info:
-#                 #     st.caption(f"响应时长: {response_time_info}")
-#             else:
-#                 # Handle potential unknown roles gracefully
-#                 st.markdown(f"*{role}*: {content}")
-
-# --- Uploader Area (Above Chat Input) ---
-# Button to toggle the file uploader visibility
-upload_col, _ = st.columns([0.1, 0.9]) # Make button column narrower (more left)
-with upload_col:
-    if st.button("📎", key="toggle_uploader", help="上传文档以添加到知识库"):
-        st.session_state.show_uploader = not st.session_state.show_uploader # Toggle visibility
+    # Refresh button for conversations
+    if st.button("🔄 刷新列表", use_container_width=True):
+        st.session_state.conversation_list = get_conversations()
         st.rerun()
 
-# Conditionally display the uploader and its logic
-if st.session_state.get("show_uploader", False):
-    with st.container(border=True): 
-        uploaded_files = st.file_uploader(
-            "", # <-- Remove label
-            accept_multiple_files=True, 
-            type=['txt', 'md', 'pdf', 'docx'], 
-            # help="上传 TXT, Markdown, PDF 或 DOCX 文件以添加到知识库。", # <-- Remove help
-            key="main_uploader" 
-        )
+    # Placeholder for delete functionality (can be added later)
+    st.markdown("---")
+    if st.session_state.get("current_conversation_id"):
+        current_conv_title = "当前对话"
+        for conv in st.session_state.get("conversation_list", []):
+            if conv.get("id") == st.session_state.current_conversation_id:
+                current_conv_title = conv.get("title", f"对话 {st.session_state.current_conversation_id[:8]}...")
+                break
+        
+        if st.button(f"🗑️ 删除对话: {current_conv_title}", use_container_width=True):
+            # Confirmation step would be good here
+            conv_to_delete = st.session_state.current_conversation_id
+            delete_url = get_api_url(f'/conversations/{conv_to_delete}')
+            try:
+                response = requests.delete(delete_url, timeout=10)
+                response.raise_for_status() # If not 2xx, raises HTTPError
+                logger.info(f"Successfully deleted conversation ID: {conv_to_delete}")
+                st.session_state.current_conversation_id = None
+                st.session_state.messages = []
+                st.session_state.conversation_list = get_conversations() # Refresh list
+                st.success(f"对话 '{current_conv_title}' 已成功删除。")
+                st.rerun()
+            except requests.exceptions.HTTPError as e:
+                # --- MODIFICATION START (Refined) ---
+                cid_to_log = conv_to_delete # Use the correct variable defined in the try block
+                title_to_log = current_conv_title # This should also be available from the outer scope
 
-        if uploaded_files:
-            # Remove the separately displayed file list for minimalism
-            # st.markdown("**已选择文件:**")
-            # for file in uploaded_files:
-            #     st.write(f"- {file.name} ({file.size} bytes)")
-            
-            if st.button("处理上传的文件", key="process_upload_main", use_container_width=True):
-                # --- Upload Logic (remains the same) --- 
-                upload_url = f"http://{API_BASE_URL.split('//')[1]}/upload-documents" 
-                files_to_upload = []
-                for file in uploaded_files:
-                    files_to_upload.append(("files", (file.name, file, file.type)))
-                    
-                if files_to_upload:
-                    with st.status("正在上传和处理文件...", expanded=True) as upload_status:
-                        try:
-                            upload_status.update(label=f"正在上传 {len(files_to_upload)} 个文件...")
-                            response = requests.post(upload_url, files=files_to_upload, timeout=300) 
-                            
-                            if response.status_code == 200:
-                                result = response.json()
-                                added_count = result.get("added_count", 0)
-                                skipped_count = result.get("skipped_count", 0)
-                                errors = result.get("errors", [])
-                                upload_status.update(label=f"处理完成！新增 {added_count}, 跳过 {skipped_count} 个文件。", state="complete", expanded=False)
-                                if errors:
-                                    st.error("处理部分文件时出错:")
-                                    for error in errors:
-                                        st.error(f"- {error}")
-                                # Hide uploader after successful processing
-                                st.session_state.show_uploader = False
-                                st.rerun()
-                            else:
-                                error_msg = get_backend_error_message(response)
-                                upload_status.update(label=f"上传失败: {error_msg}", state="error")
-                                logger.error(f"文件上传失败: {error_msg}")
-
-                        except requests.exceptions.RequestException as e:
-                            upload_status.update(label=f"连接错误: {e}", state="error")
-                            logger.error(f"文件上传时连接错误: {e}")
-                        except Exception as e:
-                            upload_status.update(label=f"发生意外错误: {e}", state="error")
-                            logger.error(f"文件上传时意外错误: {e}")
+                if e.response.status_code == 404:
+                    logger.warning(f"Attempted to delete conversation {cid_to_log}, but it was not found (404). Assuming already deleted.")
+                    st.warning(f"对话 '{title_to_log}' 未找到或已被删除。")
+                    # Treat as success for UI update
+                    st.session_state.current_conversation_id = None
+                    st.session_state.messages = []
+                    st.session_state.conversation_list = get_conversations() # Directly update the conversation list
+                    st.rerun()
                 else:
-                    st.warning("没有有效的文件可供上传。")
-                # --- End Upload Logic ---
-        # Add a cancel button maybe?
-        if st.button("完成上传", key="close_uploader"):
-            st.session_state.show_uploader = False 
-            st.rerun() 
-        
-        # Track if uploader has files
-        st.session_state.main_uploader_has_files = True
-    
-    # Logic to hide uploader if files are cleared (Commented out to fix syntax/indent issues)
-    # If no files are currently selected in the uploader widget...
-    # else: 
-    #     # ... and we previously tracked that files *were* selected...
-    #     if st.session_state.get("main_uploader_has_files", False):
-    #         # ... it means the user just cleared the selection.
-    #         st.session_state.show_uploader = False  # Hide the uploader
-    #         st.session_state.main_uploader_has_files = False # Reset the tracker
-    #         st.rerun() # Rerun to reflect the hidden state
-    pass # Add pass to avoid empty block if needed
-
-# --- User Input Area ---
-query = st.chat_input("向 智源对话 提问...") # Updated placeholder text
-
-if query:
-    # --- Start: Modified Input Handling ---
-    current_cid = st.session_state.get("current_conversation_id")
-    
-    # 1. Create a new conversation if none exists
-    if current_cid is None:
-        st.info("创建新对话中...")
-        new_conv = create_conversation(title=f"对话: {query[:20]}...") # Use first 20 chars of query as title
-        if new_conv and new_conv.get("id"):
-            current_cid = new_conv["id"]
-            st.session_state.current_conversation_id = current_cid
-            # Add the new conversation to the beginning of the list for immediate display
-            if "conversation_list" in st.session_state:
-                st.session_state.conversation_list.insert(0, new_conv) 
-            else:
-                 st.session_state.conversation_list = [new_conv]
-            st.success(f"新对话已创建: {new_conv.get('title')}")
-            # No need to rerun here, will continue to process the message
-        else:
-            st.error("无法创建新对话，请检查后端连接。")
-            st.stop() # Stop processing if conversation creation fails
-            
-    # 2. Add user message to session state AND RENDER IT IMMEDIATELY
-    user_message = {"role": "user", "content": query}
-    st.session_state.messages.append(user_message)
-    # Render the user message immediately after adding it to state
-    with st.chat_message("user"):
-        st.markdown(query)
-
-    # 3. Send message and handle streaming response
-    # Setup placeholders BEFORE the try block
-    # Use columns to place status and time_info potentially to the right or below
-    status_placeholder = st.empty()
-    answer_placeholder = st.empty()
-    citations_placeholder = st.empty() 
-    time_info_placeholder = st.empty()
-
-    # Initialize response variables
-    full_answer = ""
-    st.session_state.current_citations = [] # Reset citations for new response
-    error_occurred = False
-    start_time = time.time()
-    first_token_time = None
-    token_count = 0
-    start_datetime = datetime.now().strftime("%H:%M:%S")
-
-    # REMOVED: Explicit rendering of assistant message container here
-    # with st.chat_message("assistant"):
-    # Status and placeholders are handled outside this removed block now
-
-    try:
-        with status_placeholder.status("Assistant is thinking...", expanded=False) as status:
-            logger.info(f"向对话 {current_cid[:8]} 发送消息...")
-            
-            message_payload = {
-                "conversation_id": current_cid,
-                "content": query, 
-                "role": "user"
-            } 
-            message_stream_url = get_api_url(f'/conversations/{current_cid}/messages') 
-            headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
-            
-            with requests.post(message_stream_url, json=message_payload, headers=headers, stream=True, timeout=180) as response:
-                response.raise_for_status()
-                status.update(label="接收回复...", state="running")
-                
-                # --- Stream processing loop starts here --- 
-                current_event_type = None # Track the event type
-                for line in response.iter_lines(decode_unicode=True):
-                    current_time = time.time()
-                    elapsed = current_time - start_time
-
-                    # Process SSE lines (event:, data:, or empty lines)
-                    if line.startswith('event:'):
-                        current_event_type = line.split('event:', 1)[1].strip()
-                        # logger.debug(f"SSE Event Type: {current_event_type}")
-                        continue # Move to next line (should be data:)
-                    elif line.startswith('data:'):
-                        data_str = line.split('data:', 1)[1].strip()
-                        if not data_str: # Skip empty data lines
-                             continue
-                        
-                        # Process data based on the tracked event type or default ('message' or 'chunk')
-                        event_to_process = current_event_type if current_event_type else 'chunk' # Default to chunk if no event specified
-                        
-                        try:
-                            data = json.loads(data_str) # Assume data is always JSON
-                            
-                            if event_to_process == 'citations':
-                                extracted_citations = None
-                                # Try extracting from {"data": [...]} structure first
-                                if isinstance(data, dict):
-                                     potential_list = data.get('data')
-                                     if isinstance(potential_list, list):
-                                         extracted_citations = potential_list
-                                         logger.debug("Extracted citations using 'data' key.")
-                                # Try extracting from {"citations": [...]} structure
-                                if extracted_citations is None and isinstance(data, dict):
-                                    potential_list_alt = data.get('citations')
-                                    if isinstance(potential_list_alt, list):
-                                        extracted_citations = potential_list_alt
-                                        logger.debug("Extracted citations using 'citations' key.")
-                                
-                                # If not found or not a list, check if the data itself is the list
-                                if extracted_citations is None and isinstance(data, list):
-                                     extracted_citations = data
-                                     logger.debug("Extracted citations directly from data object.")
-                                
-                                # If we got a list one way or another
-                                if extracted_citations is not None:
-                                    st.session_state.current_citations = extracted_citations
-                                    logger.info(f"Stored citations in session state: {st.session_state.current_citations}")
-                                else:
-                                    logger.warning(f"Received citations event, but could not extract a valid list from data: {data}")
-                            elif event_to_process == 'error':
-                                detail = data.get('detail', data.get('data', '未知流错误')) # Backend might yield {'type': 'error', 'data': ...}
-                                answer_placeholder.error(f"流处理错误: {detail}")
-                                logger.error(f"SSE Error Event: {detail}")
-                                error_occurred = True
-                                status.update(label="流处理出错", state="error", expanded=True)
-                            elif event_to_process == 'end': # Handle potential end event with data?
-                                logger.info(f"SSE End Event received with data: {data}")
-                                status.update(label="流处理完成.", state="complete", expanded=False)
-                                break
-                            elif event_to_process == 'chunk': # Default data processing
-                                token = data.get("token", data.get("data")) # Backend might send {'token':...} or {'type':'chunk', 'data':...}
-                                if token:
-                                    token_count += 1
-                                    if first_token_time is None:
-                                        first_token_time = time.time()
-                                    full_answer += token
-                                    answer_placeholder.markdown(full_answer + "▌")
-                                else:
-                                     logger.warning(f"Received chunk/data event, but no 'token' or 'data' key found: {data}")
-                            # Handle other event types like 'debug' if needed
-                            elif event_to_process == 'debug':
-                                 logger.debug(f"Debug info from stream: {data.get('data', data)}")
-                                 # Optionally display debug info?
-                                 # time_info_placeholder.caption(f"Debug: {data.get('data', data)}")
-                            else:
-                                logger.warning(f"Received unhandled SSE event type '{event_to_process}' with data: {data}")
-
-                        except json.JSONDecodeError as e:
-                            # Handle cases where data might not be JSON (e.g., simple text chunk without event type)
-                            # If it wasn't explicitly typed, assume it's a text chunk
-                            if event_to_process == 'chunk': 
-                                token = data_str # Treat the raw string as the token
-                                token_count += 1
-                                if first_token_time is None:
-                                    first_token_time = time.time()
-                                full_answer += token
-                                answer_placeholder.markdown(full_answer + "▌")
-                            else:
-                                logger.warning(f"Could not parse JSON for event '{event_to_process}': {line}. Error: {e}")
-                        except Exception as parse_e:
-                            logger.error(f"Error processing SSE data line: {line}. Error: {parse_e}", exc_info=True)
-                            # Maybe display a generic processing error?
-                            # answer_placeholder.warning("处理回复时发生错误。")
-                            # error_occurred = True # Consider setting error flag
-
-                    elif line.strip() == "": # Empty line separates messages in SSE
-                        current_event_type = None # Reset event type after a message
-                    else:
-                        # Handle lines that don't conform to SSE format? Maybe log?
-                        logger.warning(f"Received non-SSE formatted line (ignoring): {line}")
-                        
-                # --- Stream processing loop ends here --- 
-
-            # --- After loop, before saving state --- 
-            end_time = time.time()
-            total_elapsed = end_time - start_time
-            tokens_per_second = token_count / total_elapsed if total_elapsed > 0 and token_count > 0 else 0
-            first_token_latency = (first_token_time - start_time) if first_token_time else total_elapsed 
-            
-            if first_token_time:
-                 time_info_text = (
-                     f"⏱️ 总耗时: {total_elapsed:.2f}秒 | "
-                     f"首token延迟: {first_token_latency:.2f}秒 | "
-                     f"速度: {tokens_per_second:.1f} token/秒 ({token_count} tokens) | "
-                     f"开始于: {start_datetime}"
-                 )
-            else:
-                 time_info_text = f"⏱️ 总耗时: {total_elapsed:.2f}秒 (未收到答案 token)"
-
-            # --- ADD DEBUG LOG --- 
-            logger.info(f"Checking citations before rendering: {st.session_state.current_citations}")
-            # --- END DEBUG LOG ---
-
-            # Render citations using the placeholder if received
-            if st.session_state.current_citations and not error_occurred:
-                 with citations_placeholder.expander("查看引用", expanded=True):
-                     for i, citation in enumerate(st.session_state.current_citations):
-                        # Access CitationSourceDetail correctly
-                        details = citation.get('source_details', [{}])[0]
-                        doc_name = details.get('doc_source_name', '未知来源')
-                        text_quote = citation.get('text_quote', '...')
-                        chunk_id = details.get('chunk_id', 'N/A')
-                        chunk_text = details.get('chunk_text', '无内容')
-
-                        st.markdown(f"**[{i+1}] 引用自:** {doc_name}")
-                        st.markdown(f"> {text_quote}")
-                        with st.popover("查看完整来源块", use_container_width=True):
-                            st.markdown(f"##### 来源: {doc_name} (块 ID: {chunk_id})")
-                            st.markdown(f"```\n{chunk_text}\n```")
-                        st.markdown("---")
-
-            # Update final UI elements and save assistant message to state
-            if not error_occurred:
-                if full_answer:
-                    answer_placeholder.markdown(full_answer) # Final answer update
-                    time_info_placeholder.caption(time_info_text)
-                    # Append assistant message to session state HERE
-                    st.session_state.messages.append({
-                        "role": "assistant", 
-                        "content": full_answer,
-                        "citations": st.session_state.current_citations,
-                        "response_time": time_info_text 
-                    })
-                    st.session_state.conversation_list = get_conversations() # Update list after successful interaction
-                # Handle empty answer case if needed (e.g., only citations returned?)
-                elif st.session_state.current_citations: # If only citations, maybe show a note?
-                    answer_placeholder.info("已找到相关引用信息。")
-                    time_info_placeholder.caption(time_info_text)
-                    st.session_state.messages.append({
-                        "role": "assistant", 
-                        "content": "", # No text answer
-                        "citations": st.session_state.current_citations,
-                        "response_time": time_info_text 
-                    })
-                    st.session_state.conversation_list = get_conversations()
-                else: # No answer, no citations
-                    answer_placeholder.warning("收到空回复。")
-                    time_info_placeholder.caption(time_info_text)
-                    st.session_state.messages.append({
-                        "role": "assistant", 
-                        "content": "",
-                        "citations": [],
-                        "response_time": time_info_text 
-                    })
-            # Clear the status placeholder at the very end if it still exists
-            status_placeholder.empty()
-
-    except requests.exceptions.RequestException as e:
-        # ... (keep existing exception handling) ...
-        error_msg = f"连接错误: 无法连接到 API ({message_stream_url}). 详情: {e}"
-        st.error(error_msg)
-        answer_placeholder.empty()
-        status_placeholder.empty() # Ensure status is cleared on error
-        # Optionally add an error message to session state?
-        # st.session_state.messages.append({"role": "assistant", "content": f"错误: {error_msg}"})
-        logger.error(error_msg)
-    except Exception as e:
-        # ... (keep existing exception handling) ...
-        error_msg = f"发生意外错误: {e}"
-        st.error(error_msg)
-        answer_placeholder.empty()
-        status_placeholder.empty()
-        # st.session_state.messages.append({"role": "assistant", "content": f"错误: {error_msg}"})
-        logger.error(error_msg, exc_info=True)
-        
-    # --- End: Modified Input Handling (No explicit rerun needed here) ---
-    
-
-
-
+                    logger.error(f"Failed to delete conversation {cid_to_log} due to HTTPError: {e.response.status_code} - {e.response.text[:100]}")
+                    st.error(f"删除对话 '{title_to_log}' 失败: 服务器错误 {e.response.status_code}。")
+                # --- MODIFICATION END (Refined) ---
+            except requests.exceptions.RequestException as e:
+                # More specific error message for network/request level issues
+                logger.error(f"Network or request error when trying to delete conversation {conv_to_delete}: {e}", exc_info=True)
+                st.error(f"删除对话 '{current_conv_title}' 失败: 网络请求错误。")
